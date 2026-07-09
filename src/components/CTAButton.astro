@@ -1,11 +1,48 @@
 ---
+import type { GrowthEventName } from "../lib/tracking";
+
 interface Props {
   href: string;
   label: string;
   variant?: "primary" | "secondary";
+  /** Omit to render a plain, untracked link (e.g. in-page nav buttons). */
+  trackEvent?: GrowthEventName;
+  pageType?: string;
+  appSlug?: string;
+  appName?: string;
+  utmContent?: string;
 }
 
-const { href, label, variant = "primary" } = Astro.props;
+const {
+  href,
+  label,
+  variant = "primary",
+  trackEvent,
+  pageType,
+  appSlug,
+  appName,
+  utmContent,
+} = Astro.props;
+
+const isExternal = /^https?:\/\//.test(href);
+
+const trackingAttrs = trackEvent
+  ? {
+      "data-track-event": trackEvent,
+      "data-app-slug": appSlug ?? "",
+      "data-app-name": appName ?? "",
+      "data-page-type": pageType ?? "",
+      "data-utm-content": utmContent ?? "",
+      "data-cta-text": label,
+      "data-destination-url": href,
+    }
+  : {};
 ---
 
-<a href={href} class={`cta-button cta-${variant}`}>{label}</a>
+<a
+  href={href}
+  class={`cta-button cta-${variant}`}
+  target={isExternal ? "_blank" : undefined}
+  rel={isExternal ? "noopener noreferrer" : undefined}
+  {...trackingAttrs}
+>{label}</a>

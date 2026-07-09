@@ -402,6 +402,7 @@ img {
 /* Locked aspect ratio + object-fit: cover so real screenshots can replace
    these placeholders later without any layout/card-size changes. */
 .card-image-wrap {
+  display: block;
   aspect-ratio: 16 / 10;
   width: 100%;
   overflow: hidden;
@@ -440,6 +441,10 @@ img {
   margin-bottom: 2px;
 }
 
+.app-card h3 a {
+  color: inherit;
+}
+
 .app-card-tagline {
   font-weight: 600;
   color: var(--color-primary);
@@ -450,6 +455,44 @@ img {
 .app-card-desc {
   font-size: 0.95rem;
   margin-bottom: 18px;
+}
+
+.app-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 0 0 16px;
+}
+
+.card-cta {
+  display: inline-flex;
+  align-items: center;
+  padding: 8px 14px;
+  border-radius: var(--radius-sm);
+  font-weight: 700;
+  font-size: 0.82rem;
+  border: 1px solid var(--color-border);
+  transition: transform 0.15s ease, box-shadow 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+
+.card-cta.demo {
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+
+.card-cta.demo:hover {
+  border-color: var(--color-teal);
+  color: var(--color-teal-dark);
+}
+
+.card-cta.remix {
+  background: var(--color-primary);
+  color: #ffffff;
+  border-color: transparent;
+}
+
+.card-cta.remix:hover {
+  background: var(--color-primary-dark);
 }
 
 .app-card-link {

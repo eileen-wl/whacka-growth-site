@@ -56,5 +56,34 @@ const {
         </div>
       </div>
     </footer>
+
+    <script>
+      import { trackGrowthEvent, type GrowthEventName } from "../lib/tracking";
+
+      // Event delegation: one listener covers every current and future
+      // element with data-track-event, on links and plain buttons alike
+      // (e.g. the clipboard "copy prompt" button, which never navigates).
+      document.addEventListener("click", (event) => {
+        const target = event.target;
+        if (!(target instanceof Element)) return;
+
+        const trackedEl = target.closest<HTMLElement>("[data-track-event]");
+        if (!trackedEl) return;
+
+        const eventName = trackedEl.dataset.trackEvent as GrowthEventName | undefined;
+        if (!eventName) return;
+
+        // Never preventDefault/await here — tracking must not delay or block
+        // the link's normal navigation.
+        trackGrowthEvent(eventName, {
+          pageType: trackedEl.dataset.pageType ?? "",
+          appSlug: trackedEl.dataset.appSlug,
+          appName: trackedEl.dataset.appName,
+          utmContent: trackedEl.dataset.utmContent,
+          destinationUrl: trackedEl.dataset.destinationUrl,
+          ctaText: trackedEl.dataset.ctaText,
+        });
+      });
+    </script>
   </body>
 </html>

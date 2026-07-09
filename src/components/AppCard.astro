@@ -1,22 +1,69 @@
 ---
 import type { AppToolData } from "../lib/sanity";
+import { createDemoUrl, createRemixUrl, getUtmContent } from "../lib/utm";
 
 interface Props {
   app: AppToolData;
+  /** Where this card is rendered — affects the page_type sent with tracked clicks. */
+  pageType?: "homepage" | "app_detail";
 }
 
-const { app } = Astro.props;
+const { app, pageType = "homepage" } = Astro.props;
+
+const demoUrl = createDemoUrl(app);
+const remixUrl = createRemixUrl(app);
+const utmContent = getUtmContent(app);
 ---
 
-<a href={`/apps/${app.slug}`} class="app-card">
-  <div class="card-image-wrap">
+<article class="app-card">
+  <a href={`/apps/${app.slug}`} class="card-image-wrap" aria-label={`${app.name} preview`}>
     <img src={app.image} alt={`${app.name} preview`} loading="lazy" width="640" height="400" />
-  </div>
+  </a>
   <div class="app-card-body">
     <span class="app-card-category">{app.category}</span>
-    <h3>{app.name}</h3>
+    <h3><a href={`/apps/${app.slug}`}>{app.name}</a></h3>
     <p class="app-card-tagline">{app.tagline}</p>
     <p class="app-card-desc">{app.shortDescription}</p>
-    <span class="app-card-link">Explore {app.name} <span aria-hidden="true">→</span></span>
+    {
+      (demoUrl || remixUrl) && (
+        <div class="app-card-actions">
+          {demoUrl && (
+            <a
+              href={demoUrl}
+              class="card-cta demo"
+              target="_blank"
+              rel="noopener noreferrer"
+              data-track-event="view_demo_click"
+              data-app-slug={app.slug}
+              data-app-name={app.name}
+              data-page-type={pageType}
+              data-utm-content={utmContent}
+              data-cta-text="View demo"
+              data-destination-url={demoUrl}
+            >
+              View demo
+            </a>
+          )}
+          {remixUrl && (
+            <a
+              href={remixUrl}
+              class="card-cta remix"
+              target="_blank"
+              rel="noopener noreferrer"
+              data-track-event="remix_click"
+              data-app-slug={app.slug}
+              data-app-name={app.name}
+              data-page-type={pageType}
+              data-utm-content={utmContent}
+              data-cta-text="Remix app"
+              data-destination-url={remixUrl}
+            >
+              Remix app
+            </a>
+          )}
+        </div>
+      )
+    }
+    <a href={`/apps/${app.slug}`} class="app-card-link">Explore {app.name} <span aria-hidden="true">→</span></a>
   </div>
-</a>
+</article>

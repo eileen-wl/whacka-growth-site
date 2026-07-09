@@ -4,8 +4,10 @@ import AppCard from "../components/AppCard.astro";
 import CTAButton from "../components/CTAButton.astro";
 import { categories } from "../data/apps";
 import { getApps } from "../lib/sanity";
+import { createHomepageBuildUrl } from "../lib/utm";
 
 const apps = await getApps();
+const homepageBuildUrl = createHomepageBuildUrl();
 
 const steps = [
   {
@@ -41,7 +43,13 @@ const steps = [
           and build it in minutes.
         </p>
         <div class="hero-actions">
-          <CTAButton href="#apps" label="Browse the toolkit" />
+          <CTAButton
+            href={homepageBuildUrl}
+            label="Build your own app with Whacka"
+            trackEvent="build_click"
+            pageType="homepage"
+            utmContent="homepage"
+          />
           <CTAButton href="#how-it-works" label="See how it works" variant="secondary" />
         </div>
       </div>
