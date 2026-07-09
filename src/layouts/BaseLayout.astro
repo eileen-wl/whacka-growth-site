@@ -1,0 +1,60 @@
+---
+import "../styles/global.css";
+
+interface Props {
+  title: string;
+  description?: string;
+}
+
+const {
+  title,
+  description = "Discover practical mini apps small business owners can build with Whacka.",
+} = Astro.props;
+---
+
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🧰</text></svg>" />
+    <title>{title}</title>
+    <meta name="description" content={description} />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body>
+    <header class="site-header">
+      <div class="container header-inner">
+        <a href="/" class="brand">
+          <span class="brand-mark" aria-hidden="true"></span>
+          <span class="brand-label">Small Business Mini App Toolkit</span>
+        </a>
+        <nav class="site-nav">
+          <a href="/#apps">Apps</a>
+          <a href="/#how-it-works">How it works</a>
+          <a href="/#categories">Categories</a>
+          <a href="/#apps" class="cta-button cta-primary">Browse the toolkit</a>
+        </nav>
+      </div>
+    </header>
+
+    <main>
+      <slot />
+    </main>
+
+    <footer class="site-footer">
+      <div class="container footer-inner">
+        <p>Built with Whacka — practical mini apps for small business owners.</p>
+        <div class="footer-links">
+          <a href="/#apps">Apps</a>
+          <a href="/#how-it-works">How it works</a>
+          <a href="/#categories">Categories</a>
+        </div>
+      </div>
+    </footer>
+  </body>
+</html>

@@ -1,0 +1,25 @@
+{
+  "name": "small-business-mini-app-toolkit",
+  "type": "module",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "astro dev",
+    "start": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview",
+    "astro": "astro",
+    "seed": "tsx scripts/seed.ts"
+  },
+  "dependencies": {
+    "@sanity/client": "^7.23.0",
+    "astro": "^4.16.0"
+  },
+  "devDependencies": {
+    "@astrojs/check": "^0.9.9",
+    "@types/node": "^20.19.43",
+    "dotenv": "^17.4.2",
+    "tsx": "^4.23.0",
+    "typescript": "^5.9.3"
+  }
+}

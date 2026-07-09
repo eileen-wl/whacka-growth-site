@@ -1,0 +1,189 @@
+---
+import { getApps, type AppToolData } from "../lib/sanity";
+import CTAButton from "./CTAButton.astro";
+import AppCard from "./AppCard.astro";
+
+interface Props {
+  app: AppToolData;
+}
+
+const { app } = Astro.props;
+
+const allApps = await getApps();
+const relatedApps = app.relatedSlugs
+  .map((slug) => allApps.find((candidate) => candidate.slug === slug))
+  .filter((candidate): candidate is AppToolData => Boolean(candidate));
+---
+
+<article class="app-detail">
+  <section class="detail-hero">
+    <div class="container detail-hero-grid">
+      <div class="detail-hero-copy">
+        <a href="/#apps" class="breadcrumb">← Back to toolkit</a>
+        <span class="detail-category">{app.category}</span>
+        <h1>{app.name}</h1>
+        <p class="detail-tagline">{app.tagline}</p>
+        <p class="detail-desc">{app.shortDescription}</p>
+        <CTAButton href={app.ctaHref} label={app.ctaLabel} />
+      </div>
+      <div class="detail-hero-image">
+        <img src={app.image} alt={`${app.name} preview`} width="640" height="400" />
+      </div>
+    </div>
+  </section>
+
+  <section class="detail-section screenshots">
+    <div class="container">
+      <h2>See it in action</h2>
+      <div class="gallery-grid">
+        {
+          app.screenshots.map((shot) => (
+            <div class="gallery-item">
+              <div class="gallery-image">
+                <img src={shot.image} alt={shot.caption} loading="lazy" width="640" height="400" />
+              </div>
+              <p class="gallery-caption">{shot.caption}</p>
+            </div>
+          ))
+        }
+      </div>
+    </div>
+  </section>
+
+  <section class="detail-section alt">
+    <div class="container two-col-grid">
+      <div class="info-card">
+        <div class="info-card-icon problem" aria-hidden="true">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+            <path
+              d="M12 3.5 21 19.5H3L12 3.5Z"
+              stroke="#dc2626"
+              stroke-width="1.8"
+              stroke-linejoin="round"
+            />
+            <line x1="12" y1="10" x2="12" y2="14.5" stroke="#dc2626" stroke-width="1.8" stroke-linecap="round" />
+            <circle cx="12" cy="17.2" r="1" fill="#dc2626" />
+          </svg>
+        </div>
+        <h2>The problem</h2>
+        <p>{app.problem}</p>
+      </div>
+      <div class="info-card">
+        <div class="info-card-icon solution" aria-hidden="true">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+            <circle cx="12" cy="12" r="9" stroke="#0d9488" stroke-width="1.8" />
+            <path d="M8 12.5 10.8 15.3 16 9.5" stroke="#0d9488" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+        </div>
+        <h2>The solution</h2>
+        <p>{app.solution}</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="detail-section who">
+    <div class="container">
+      <h2>Who it's for</h2>
+      <div class="who-grid">
+        {
+          app.whoItsFor.map((item) => (
+            <div class="who-card">
+              <div class="who-card-icon" aria-hidden="true">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+                  <path
+                    d="M4 20v-1.2C4 15.6 7.6 13 12 13s8 2.6 8 5.8V20"
+                    stroke="#2563eb"
+                    stroke-width="1.8"
+                    stroke-linecap="round"
+                  />
+                  <circle cx="12" cy="7.5" r="3.5" stroke="#2563eb" stroke-width="1.8" />
+                </svg>
+              </div>
+              <p>{item}</p>
+            </div>
+          ))
+        }
+      </div>
+    </div>
+  </section>
+
+  <section class="detail-section prompt-section">
+    <div class="container">
+      <h2>Copy this prompt to build it in Whacka</h2>
+      <div class="prompt-card">
+        <div class="prompt-card-header">
+          <span class="prompt-card-label">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+              <path d="M9 4h6a2 2 0 0 1 2 2v1H7V6a2 2 0 0 1 2-2Z" stroke="#94a3b8" stroke-width="1.8" />
+              <rect x="5" y="7" width="14" height="14" rx="2" stroke="#94a3b8" stroke-width="1.8" />
+            </svg>
+            Whacka prompt
+          </span>
+          <button class="copy-button" id="copy-button" type="button">Copy prompt</button>
+        </div>
+        <pre class="prompt-text" id="prompt-text">{app.prompt}</pre>
+      </div>
+    </div>
+  </section>
+
+  {
+    relatedApps.length > 0 && (
+      <section class="detail-section related">
+        <div class="container">
+          <h2>Related mini apps</h2>
+          <div class="related-grid">
+            {relatedApps.map((relatedApp) => (
+              <AppCard app={relatedApp} />
+            ))}
+          </div>
+        </div>
+      </section>
+    )
+  }
+
+  <section class="detail-section faq">
+    <div class="container">
+      <h2>Frequently asked questions</h2>
+      <div class="faq-list">
+        {
+          app.faq.map((item) => (
+            <details class="faq-item">
+              <summary>{item.question}</summary>
+              <p>{item.answer}</p>
+            </details>
+          ))
+        }
+      </div>
+    </div>
+  </section>
+
+  <section class="cta-band">
+    <div class="cta-band-inner">
+      <h2>Ready to build {app.name}?</h2>
+      <p>Copy the prompt above and have a working {app.name} mini app running with Whacka today.</p>
+      <CTAButton href={app.ctaHref} label={app.ctaLabel} />
+    </div>
+  </section>
+</article>
+
+<script>
+  const button = document.getElementById("copy-button");
+  const promptEl = document.getElementById("prompt-text");
+
+  if (button && promptEl) {
+    button.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(promptEl.textContent || "");
+        const original = button.textContent;
+        button.textContent = "Copied!";
+        button.classList.add("copied");
+        setTimeout(() => {
+          button.textContent = original;
+          button.classList.remove("copied");
+        }, 2000);
+      } catch (err) {
+        console.error("Copy failed", err);
+      }
+    });
+  }
+</script>

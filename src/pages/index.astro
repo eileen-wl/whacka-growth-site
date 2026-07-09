@@ -1,0 +1,120 @@
+---
+import BaseLayout from "../layouts/BaseLayout.astro";
+import AppCard from "../components/AppCard.astro";
+import CTAButton from "../components/CTAButton.astro";
+import { categories } from "../data/apps";
+import { getApps } from "../lib/sanity";
+
+const apps = await getApps();
+
+const steps = [
+  {
+    title: "Pick an idea",
+    description:
+      "Browse five ready-made mini app concepts built around real small business problems.",
+  },
+  {
+    title: "Copy the prompt",
+    description:
+      "Every app page includes a ready-to-use prompt describing exactly what to build.",
+  },
+  {
+    title: "Build with Whacka",
+    description:
+      "Paste the prompt into Whacka and get a working mini app — no coding required.",
+  },
+];
+---
+
+<BaseLayout
+  title="Small Business Mini App Toolkit"
+  description="Discover practical mini apps small business owners can build with Whacka."
+>
+  <section class="hero">
+    <div class="container hero-grid">
+      <div class="hero-copy">
+        <span class="eyebrow"><span class="eyebrow-dot" aria-hidden="true"></span>Whacka Growth Toolkit</span>
+        <h1>Practical mini apps, built for small business owners</h1>
+        <p class="hero-sub">
+          Five ready-to-build Whacka app ideas for the everyday problems small business owners
+          face — orders, bookings, quotes, requests, and catalogs. Pick one, copy the prompt,
+          and build it in minutes.
+        </p>
+        <div class="hero-actions">
+          <CTAButton href="#apps" label="Browse the toolkit" />
+          <CTAButton href="#how-it-works" label="See how it works" variant="secondary" />
+        </div>
+      </div>
+      <div class="hero-visual">
+        <img src="/images/hero-grid.svg" alt="Grid of five Whacka mini app icons" width="640" height="420" />
+      </div>
+    </div>
+  </section>
+
+  <section class="how-it-works" id="how-it-works">
+    <div class="container">
+      <div class="section-heading">
+        <h2>From idea to working app in three steps</h2>
+        <p>No design, no backend, no code — just describe what you need.</p>
+      </div>
+      <div class="steps-grid">
+        {
+          steps.map((step, i) => (
+            <div class="step-card">
+              <span class="step-number">{i + 1}</span>
+              <h3>{step.title}</h3>
+              <p>{step.description}</p>
+            </div>
+          ))
+        }
+      </div>
+    </div>
+  </section>
+
+  <section class="apps-section" id="apps">
+    <div class="container">
+      <div class="section-heading">
+        <h2>Five mini apps to get you started</h2>
+        <p>Each one solves a specific, everyday problem — pick the one that fits your business.</p>
+      </div>
+      <div class="apps-grid">
+        {apps.map((app) => <AppCard app={app} />)}
+      </div>
+    </div>
+  </section>
+
+  <section class="categories-section" id="categories">
+    <div class="container">
+      <div class="section-heading">
+        <h2>Browse by use case</h2>
+        <p>Not sure where to start? Find the toolkit built for your day-to-day.</p>
+      </div>
+      <div class="category-grid">
+        {
+          categories.map((category) => {
+            const app = apps.find((a) => category.appSlugs.includes(a.slug));
+            return (
+              <div class="category-card">
+                <h3>{category.name}</h3>
+                <p>{category.description}</p>
+                {app && (
+                  <a class="category-link" href={`/apps/${app.slug}`}>
+                    Explore {app.name} →
+                  </a>
+                )}
+              </div>
+            );
+          })
+        }
+      </div>
+    </div>
+  </section>
+
+  <section class="cta-band">
+    <div class="cta-band-inner">
+      <h2>Ready to build your first mini app?</h2>
+      <p>Pick an idea above, copy its prompt, and have a working app running with Whacka today.</p>
+      <CTAButton href="#apps" label="Browse the toolkit" />
+    </div>
+  </section>
+</BaseLayout>

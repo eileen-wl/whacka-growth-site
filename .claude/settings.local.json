@@ -1,0 +1,25 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm --version)",
+      "Bash(npm install *)",
+      "Bash(npx astro *)",
+      "Bash(node \"C:/Users/eilee/AppData/Local/Temp/claude/d-----whacka---cc-page/08fc4cbf-3f6f-4789-a21a-948ffd3c0773/scratchpad/generate-images.mjs\")",
+      "Skill(run)",
+      "Skill(run:*)",
+      "Bash(chromium-cli --help)",
+      "Bash(npx --yes playwright --version)",
+      "Read(//c/Users/eilee/AppData/Local/**)",
+      "Bash(node -e ' *)",
+      "Bash(curl -s http://localhost:4321/)",
+      "Bash(grep -n \"hero-visual\\\\s*{$\\\\|hero-copy,$\\\\|min-width: 0\" \"C:/Users/eilee/AppData/Local/Temp/claude/d-----whacka---cc-page/08fc4cbf-3f6f-4789-a21a-948ffd3c0773/scratchpad/home.html\")",
+      "Bash(timeout 90 npx --yes playwright install chromium)",
+      "Bash(npx playwright *)",
+      "Bash(node \"C:/Users/eilee/AppData/Local/Temp/claude/d-----whacka---cc-page/08fc4cbf-3f6f-4789-a21a-948ffd3c0773/scratchpad/diagnose.mjs\")",
+      "Bash(cp \"C:/Users/eilee/AppData/Local/Temp/claude/d-----whacka---cc-page/08fc4cbf-3f6f-4789-a21a-948ffd3c0773/scratchpad/diagnose.mjs\" \"d:/实习/whacka增长/cc page/diagnose.mjs\")",
+      "Bash(node diagnose.mjs)",
+      "Bash(npm uninstall *)",
+      "Bash(pkill -f \"astro dev\")"
+    ]
+  }
+}

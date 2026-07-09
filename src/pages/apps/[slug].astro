@@ -1,0 +1,26 @@
+---
+import BaseLayout from "../../layouts/BaseLayout.astro";
+import AppDetail from "../../components/AppDetail.astro";
+import { getApps, type AppToolData } from "../../lib/sanity";
+
+export async function getStaticPaths() {
+  const apps = await getApps();
+  return apps.map((app) => ({
+    params: { slug: app.slug },
+    props: { app },
+  }));
+}
+
+interface Props {
+  app: AppToolData;
+}
+
+const { app } = Astro.props;
+---
+
+<BaseLayout
+  title={`${app.name} — ${app.tagline} | Small Business Mini App Toolkit`}
+  description={app.shortDescription}
+>
+  <AppDetail app={app} />
+</BaseLayout>
