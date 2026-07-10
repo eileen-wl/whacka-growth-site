@@ -37,7 +37,11 @@ export interface GrowthEventProperties {
 }
 
 type GtagFn = (...args: unknown[]) => void;
-type PosthogCaptureFn = (eventName: string, properties?: Record<string, unknown>) => void;
+type PosthogCaptureFn = (
+  eventName: string,
+  properties?: Record<string, unknown>,
+  options?: Record<string, unknown>
+) => void;
 
 declare global {
   interface Window {
@@ -104,12 +108,26 @@ export function trackGrowthEvent(eventName: GrowthEventName, properties: GrowthE
 
   try {
     if (typeof window.gtag === "function") {
-      window.gtag("event", eventName, payload);
+      // transport_type: "beacon" is GA4's documented way to guarantee an
+      // event survives a click that immediately opens/navigates elsewhere
+      // (see the posthog send_instantly/sendBeacon comment below — same
+      // underlying problem: gtag may otherwise defer sending this).
+      window.gtag("event", eventName, { ...payload, transport_type: "beacon" });
       delivered = true;
     }
 
     if (typeof window.posthog?.capture === "function") {
-      window.posthog.capture(eventName, payload);
+      // Every tracked CTA either opens its destination in a new tab
+      // (backgrounding this tab, where posthog-js's default 3s batched
+      // flush can be throttled or lost) or doesn't navigate at all
+      // (copy_prompt_click). send_instantly skips posthog-js's request
+      // batching queue so the event is dispatched the moment capture() is
+      // called, and sendBeacon keeps the request alive even if this tab
+      // gets backgrounded or closed right after.
+      window.posthog.capture(eventName, payload, {
+        send_instantly: true,
+        transport: "sendBeacon",
+      });
       delivered = true;
     }
   } catch (err) {

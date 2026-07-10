@@ -58,6 +58,12 @@ const {
     </footer>
 
     <script>
+      import { initPostHog } from "../lib/posthog";
+
+      initPostHog();
+    </script>
+
+    <script>
       import { trackGrowthEvent, type GrowthEventName } from "../lib/tracking";
 
       // Event delegation: one listener covers every current and future
