@@ -7,6 +7,8 @@ interface ImportMetaEnv {
   readonly PUBLIC_SANITY_API_VERSION?: string;
   readonly PUBLIC_POSTHOG_KEY?: string;
   readonly PUBLIC_POSTHOG_HOST?: string;
+  readonly PUBLIC_SITE_URL?: string;
+  readonly PUBLIC_GOOGLE_SITE_VERIFICATION?: string;
 }
 
 interface ImportMeta {

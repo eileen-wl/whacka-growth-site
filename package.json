@@ -12,6 +12,7 @@
     "seed": "tsx scripts/seed.ts"
   },
   "dependencies": {
+    "@astrojs/sitemap": "3.2.1",
     "@sanity/client": "^7.23.0",
     "astro": "^4.16.0",
     "posthog-js": "^1.399.1"

@@ -10,6 +10,12 @@ const {
   title,
   description = "Discover practical mini apps small business owners can build with Whacka.",
 } = Astro.props;
+
+// Astro.site comes from astro.config.mjs's `site` (PUBLIC_SITE_URL, falling
+// back to http://localhost:4321 — see astro.config.mjs), so this is never
+// hardcoded to localhost in a production build.
+const canonicalUrl = new URL(Astro.url.pathname, Astro.site);
+const googleSiteVerification = import.meta.env.PUBLIC_GOOGLE_SITE_VERIFICATION;
 ---
 
 <html lang="en">
@@ -19,6 +25,13 @@ const {
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🧰</text></svg>" />
     <title>{title}</title>
     <meta name="description" content={description} />
+    <link rel="canonical" href={canonicalUrl.href} />
+    <link rel="sitemap" href="/sitemap-index.xml" />
+    {
+      googleSiteVerification && (
+        <meta name="google-site-verification" content={googleSiteVerification} />
+      )
+    }
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
