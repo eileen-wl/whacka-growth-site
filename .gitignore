@@ -18,3 +18,7 @@ studio/.env
 
 # macOS-specific files
 .DS_Store
+
+# raw/processed growth analytics snapshots (keep the folders via .gitkeep)
+growth/data/raw/*.json
+growth/data/processed/*.json

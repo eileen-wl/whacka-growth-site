@@ -9,7 +9,9 @@
     "build": "astro build",
     "preview": "astro preview",
     "astro": "astro",
-    "seed": "tsx scripts/seed.ts"
+    "seed": "tsx scripts/seed.ts",
+    "growth:collect:posthog": "tsx growth/scripts/collect-posthog.ts",
+    "test": "vitest run"
   },
   "dependencies": {
     "@astrojs/sitemap": "3.2.1",
@@ -22,6 +24,7 @@
     "@types/node": "^20.19.43",
     "dotenv": "^17.4.2",
     "tsx": "^4.23.0",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
   }
 }
