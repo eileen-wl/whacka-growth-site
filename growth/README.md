@@ -5,7 +5,7 @@ sources into dated local snapshots (`growth/data/raw/`), for the Growth
 Report Agent (not yet built) to consume downstream. Nothing in this
 directory runs in the browser or ships with the Astro build.
 
-Currently implemented: **PostHog** only. GA4, Search Console, and Whacka
+Currently implemented: **PostHog** and **GA4**. Search Console and Whacka
 conversion data are future collectors, not yet built.
 
 ## PostHog collector
@@ -88,3 +88,79 @@ timestamp suffix, or overwrites in place if you pass `--overwrite`.
 | `PostHog API responded with 401 ...` | The Personal API Key is invalid, expired, or lacks project access. |
 | `PostHog API responded with 404 ...` | `POSTHOG_PROJECT_ID` doesn't match a project the key can access. |
 | `Unexpected PostHog response shape: ...` | PostHog returned a response without a `results` array (e.g. an error payload with a different shape than expected). |
+
+## GA4 collector
+
+### Authentication prerequisite: Application Default Credentials
+
+This collector authenticates with **local Application Default Credentials
+(ADC)**, not a service-account key file. Before running it, log in once:
+
+```bash
+gcloud auth application-default login
+```
+
+`growth/collectors/ga4.ts` constructs `new BetaAnalyticsDataClient()` with
+no explicit credentials — the Google client library discovers ADC on its
+own (via `gcloud`'s cached login, a `GOOGLE_APPLICATION_CREDENTIALS` env
+var, or the runtime's metadata server, in that order). There is no service-
+account JSON file to download, store, or `.gitignore` for this collector,
+and no manual OAuth client loading in this codebase.
+
+The logged-in Google account/ADC principal needs **Viewer** access to the
+GA4 property in Google Analytics (Admin → Property Access Management).
+
+### Required environment variable
+
+| Variable | Description |
+| --- | --- |
+| `GA4_PROPERTY_ID` | The **numeric** GA4 property ID (Admin → Property details), digits only — not the `G-XXXXXXX` measurement ID used by `gtag`/`PUBLIC_GA_MEASUREMENT_ID`. |
+
+### Running it
+
+```bash
+# Default: last 7 complete calendar days (UTC), ending yesterday
+npm run growth:collect:ga4
+
+# Custom range (ISO dates only, YYYY-MM-DD)
+npm run growth:collect:ga4 -- --start 2026-07-01 --end 2026-07-15
+
+# Re-run the same range without creating a timestamped duplicate file
+npm run growth:collect:ga4 -- --start 2026-07-01 --end 2026-07-15 --overwrite
+```
+
+Each run calls the GA4 Data API's `runReport` three times against
+`properties/{GA4_PROPERTY_ID}`, all for the same date range:
+
+| Report | Dimensions | Metrics |
+| --- | --- | --- |
+| `traffic_overview` | `date` | `sessions`, `activeUsers`, `screenPageViews`, `engagedSessions`, `engagementRate` |
+| `traffic_acquisition` | `date`, `sessionSource`, `sessionMedium`, `sessionCampaignName` | `sessions`, `activeUsers`, `engagedSessions`, `engagementRate` |
+| `landing_pages` | `date`, `landingPagePlusQueryString` | `sessions`, `activeUsers`, `screenPageViews`, `engagedSessions`, `engagementRate` |
+
+### Output
+
+Snapshots are written to:
+
+```
+growth/data/raw/ga4-{start}_to_{end}.json
+```
+
+containing `source`, `collectedAt`, `period`, `propertyId`, and one object
+per report (`trafficOverview`, `trafficAcquisition`, `landingPages`), each
+with that report's `headers` (dimension/metric names), `rows`, `rowCount`,
+and any extra response metadata GA4 returned. Same collision convention as
+the PostHog collector: an existing file for that exact range is never
+overwritten silently — a timestamp suffix is used unless you pass
+`--overwrite`. These files are git-ignored (`growth/data/raw/*.json`).
+
+### Common errors
+
+| Error | Cause |
+| --- | --- |
+| `Missing required environment variable: GA4_PROPERTY_ID` | Not set in `.env`. |
+| `GA4_PROPERTY_ID must contain digits only ...` | You pasted the `G-XXXXXXX` measurement ID instead of the numeric property ID. |
+| `Invalid --start/--end date "..."` / `--start (...) must not be after --end (...)` | Same date validation as the PostHog collector. |
+| `GA4 runReport ("...") failed: ... 7 PERMISSION_DENIED ...` | Your ADC-logged-in account lacks Viewer access to this GA4 property. |
+| `GA4 runReport ("...") failed: Could not load the default credentials ...` | You haven't run `gcloud auth application-default login` yet (or it expired). |
+| `Unexpected GA4 response shape for report "...": ...` | GA4 returned a response without the expected headers/rows arrays. |
