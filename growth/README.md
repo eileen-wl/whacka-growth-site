@@ -1,15 +1,16 @@
-# Growth data collectors
+# Growth data collectors, Normalizer, and Growth Report Agent
 
 Server-side scripts that pull raw growth-event data from external analytics
-sources into dated local snapshots (`growth/data/raw/`), for the Growth
-Report Agent (not yet built) to consume downstream. Nothing in this
-directory runs in the browser or ships with the Astro build.
+sources into dated local snapshots (`growth/data/raw/`), normalize them into
+one processed growth-summary file (`growth/data/processed/`), and generate
+an LLM-assisted Growth Report from that summary (`growth/reports/`).
+Nothing in this directory runs in the browser or ships with the Astro build.
 
 Collectors implemented: **PostHog**, **GA4**, and **Search Console**. Whacka
 conversion data is a future collector, not yet built. A deterministic
-**Normalizer** (see below) turns those three raw snapshots into one
-processed growth-summary file — that's what the future Growth Report Agent
-will actually read.
+**Normalizer** turns those three raw snapshots into one processed
+growth-summary file, which the **Growth Report Agent** (see below) reads to
+produce a JSON + Markdown report.
 
 ## PostHog collector
 
@@ -428,3 +429,170 @@ always `null` with `status: "not_connected"` — this is a placeholder for a
 not-yet-built Whacka product-side collector, not a real "zero conversions"
 result. Never treat these `null`s as `0`; a future collector will populate
 them once Whacka's product-side attribution is connected.
+
+## Growth Report Agent
+
+### Role in the fixed Growth Loop, and how it differs from the Experiment Decision Agent
+
+This is step 7 of the confirmed Growth Loop, reading the Normalizer's
+output (step 6) and preparing inputs for the Experiment Decision Agent
+(step 8, not yet built). Its job is **explanation, not decision**:
+
+- It explains what the evidence shows for the period — observed facts,
+  interpretations, data limitations — and packages `decisionInputs`
+  (signals worth reviewing, open questions) for the next agent.
+- It never picks the next experiment, topic, CTA, or distribution channel.
+  The system prompt explicitly forbids this (see below), and the schema
+  has no field for "next action" — there's nowhere to put one even if the
+  model tried.
+- The **Experiment Decision Agent** (future) is the one that reads this
+  report's `decisionInputs` and actually decides what to try next. Keeping
+  the boundary strict means the evidence-grounded explanation step can't
+  be silently skipped or short-circuited by an eager "just tell me what to
+  do next" prompt.
+
+### Why it reads normalized data, not raw platform files
+
+The Agent only ever reads one `growth-summary-*.json` file — never
+`posthog-*.json`/`ga4-*.json`/`gsc-*.json` directly. The Normalizer already
+resolved every platform-specific quirk (GA4's `YYYYMMDD` dates, PostHog's
+per-group `unique_users`, three different "empty data" conventions) into
+one stable schema with additive-safe metrics and explicit `null`s where a
+number can't be safely derived. Reading raw files here would mean
+re-deriving that logic (and re-introducing its failure modes) a second
+time, in a prompt, where mistakes are invisible until a report reads badly.
+
+### Provider-neutral architecture
+
+```
+growth/agents/growth-report-agent.ts   — orchestration; imports only growth/llm/provider.ts's
+                                          LLMProvider interface, never an SDK directly
+growth/llm/provider.ts                 — the LLMProvider interface + shared error types
+growth/llm/mock-provider.ts            — no API key, no network call, schema-valid output
+growth/llm/anthropic-provider.ts       — the only file that imports @anthropic-ai/sdk
+growth/prompts/growth-report-prompt.ts — system/user prompt construction (provider-agnostic)
+growth/renderers/growth-report-markdown.ts — pure JSON -> Markdown renderer (never LLM-generated)
+```
+
+Swapping providers is a constructor call, not a rewrite: `new
+MockGrowthReportProvider()` or `new AnthropicGrowthReportProvider({ apiKey,
+model })`, both satisfying the same `LLMProvider` interface. The evidence
+catalog (deterministic facts derived from the growth summary, each with a
+stable `id`) is the only thing the model is allowed to cite — it never
+recalculates a metric or invents one.
+
+### Why the Anthropic SDK is wired up even though there's no API key yet
+
+`@anthropic-ai/sdk` is a real dependency and `anthropic-provider.ts` is
+fully implemented — using `client.messages.parse()` with
+`output_config.format: zodOutputFormat(growthReportAnalysisSchema)` for
+structured output — but nothing about *importing* that module or
+*constructing* an `AnthropicGrowthReportProvider` requires a key: the real
+`Anthropic` client is only constructed lazily, inside `generateStructuredReport()`,
+and only when no test client was injected. This means the live path is
+fully built, type-checked, and unit-tested (with the SDK's error classes
+thrown from a mocked client) today, and becomes usable the moment
+`ANTHROPIC_API_KEY` and `GROWTH_REPORT_MODEL` are set — no code changes.
+
+**Claude Code being installed or logged in on this machine does not
+provide `ANTHROPIC_API_KEY` to this application.** Claude Code's own
+credentials are separate from — and inaccessible to — this Node script;
+`ANTHROPIC_API_KEY` must be an Anthropic API key set explicitly in `.env`.
+
+### Running it
+
+```bash
+# Dry run: loads the summary, builds the evidence catalog and prompts,
+# writes a request preview — makes no provider call, needs no key/model.
+npm run growth:report -- --start 2026-07-08 --end 2026-07-14 --dry-run
+
+# Full local pipeline with the Mock Provider — no key, no network call,
+# exercises every step through JSON + Markdown output.
+npm run growth:report -- --start 2026-07-08 --end 2026-07-14 --provider mock
+
+# Future live run, once ANTHROPIC_API_KEY and GROWTH_REPORT_MODEL are set
+# and GROWTH_REPORT_LLM_PROVIDER=anthropic in .env:
+npm run growth:report -- --start 2026-07-08 --end 2026-07-14
+
+# Other flags: --input <file> (use an exact summary file instead of
+# discovery), --language en|zh-CN (default en), --overwrite
+```
+
+### Required live environment variables
+
+| Variable | Required for |
+| --- | --- |
+| `GROWTH_REPORT_LLM_PROVIDER=anthropic` | Selecting Anthropic as the default provider for a plain `npm run growth:report` (no `--provider` flag). `--provider mock` and `--dry-run` ignore this. |
+| `GROWTH_REPORT_MODEL` | Any live Anthropic call. Left blank in `.env.example` on purpose — the model isn't confirmed yet, and this script never hardcodes a default. |
+| `ANTHROPIC_API_KEY` | Any live Anthropic call. Never required for `--dry-run` or `--provider mock`. |
+| `GROWTH_REPORT_MAX_TOKENS` | Optional, defaults to `6000`. |
+
+### Output locations
+
+```
+growth/data/processed/growth-report-request-{start}_to_{end}.json   (--dry-run preview)
+growth/reports/growth-report-{start}_to_{end}.json                  (Mock/live run)
+growth/reports/growth-report-{start}_to_{end}.md                    (Mock/live run)
+```
+
+Same collision convention as every other script here: an existing file for
+that exact range is never overwritten silently — a timestamp suffix is
+used unless you pass `--overwrite`. JSON/Markdown reports are written
+atomically (write-to-temp-file-then-rename) so a failed write can't leave
+a truncated file behind. Generated reports are git-ignored
+(`growth/reports/*.json`, `growth/reports/*.md`) — only `.gitkeep` is
+committed.
+
+### The evidence-reference mechanism
+
+Every fact the model can cite lives in a deterministic **evidence
+catalog** built from the growth summary before any provider is called —
+entries like `traffic.sessions`, `behavior.total_cta_clicks`,
+`search.top_query.1`, each with a stable `id`, `label`, `value`, `source`,
+and `measurementBasis`. The model's structured response must cite these
+IDs in every `evidenceRefs` array instead of retyping numbers or inventing
+a metric path. After the response comes back, the Agent:
+
+1. Validates it against the Zod schema (required for the Mock Provider,
+   which skips the Anthropic SDK's own client-side schema parsing).
+2. Confirms every cited evidence ID actually exists in the catalog —
+   unknown IDs reject the whole response; nothing is silently dropped.
+3. Requires at least one `dataLimitations` entry whenever data quality
+   isn't `"complete"`.
+
+Any failure here means **no final report is written** — the Markdown
+renderer then resolves each cited ID back to its label/value/source, so
+every claim in the report is traceable to a specific measured number.
+
+### Partial-data and empty-Search-Console behavior
+
+A `"partial"` `dataQuality.overallStatus` from the Normalizer is
+**accepted**, not rejected — only `"invalid"` is refused (see the
+Normalizer section above for what triggers each status). In practice
+`"partial"` is the expected/common case today, since GA4's period-level
+`activeUsers` and PostHog's site-wide unique-user count are both
+unavailable by design. When Search Console is `"empty"` or `"missing"`,
+the evidence catalog still includes `search.status` reflecting that, the
+system prompt explicitly instructs the model to acknowledge it, and the
+Mock Provider adapts its own placeholder text to the same status. Whacka
+product-side conversions are always `null`/`"not_connected"` for the same
+reason — the system prompt forbids treating that as "zero" or fabricating
+a number for it.
+
+### Common errors
+
+| Error | Cause |
+| --- | --- |
+| `growth:report requires --start and --end ...` | Missing `--start`/`--end` (required even with `--input`). |
+| `No normalized growth summary found for ... — run growth:normalize for this range first.` | No matching `growth-summary-*.json` in `growth/data/processed/`. |
+| `"..." does not match the expected normalized growth-summary schema.` | The input file isn't shaped like a Normalizer output (or isn't a growth summary at all). |
+| `... has dataQuality.overallStatus = "invalid" ...` | The summary itself is invalid (its inputs' periods didn't match); `"partial"` is fine, `"invalid"` is refused. |
+| `Growth summary snapshot's period (...) does not match the requested period (...)` | The selected/`--input` file covers a different date range than `--start`/`--end`. |
+| `No LLM provider configured. Pass --provider mock ...` | Neither `--provider` nor `GROWTH_REPORT_LLM_PROVIDER` is set, and this isn't a dry run. |
+| `ANTHROPIC_API_KEY is required for a live Anthropic run ...` | Live Anthropic mode without a key. |
+| `GROWTH_REPORT_MODEL is required for a live Anthropic run ...` | Live Anthropic mode without a model. |
+| `Anthropic rejected the request: authentication failed ...` | The API key is invalid/revoked. |
+| `Anthropic refused to generate a structured report ...` / `... was truncated at the max_tokens limit ...` | `stop_reason` was `refusal` / `max_tokens` — see growth/llm/anthropic-provider.ts. |
+| `Model response referenced unknown evidence ID(s): ...` | The model cited an ID not in the evidence catalog — the report is rejected, not patched. |
+| `Model response did not match the required schema: ...` | Zod validation failed (bad enum, unknown key, too-short array, etc.). |
+

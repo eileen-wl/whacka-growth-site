@@ -1,5 +1,6 @@
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { randomUUID } from "node:crypto";
+import { existsSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 
 export interface SnapshotPeriod {
   start: string;
@@ -35,4 +36,19 @@ export function resolveSnapshotPath(
 export function writeSnapshotFile(path: string, snapshot: unknown): void {
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, `${JSON.stringify(snapshot, null, 2)}\n`, "utf-8");
+}
+
+/**
+ * Writes `content` to `path` atomically: writes to a temp file in the same
+ * directory, then renames it into place. `rename` is atomic on the same
+ * filesystem, so a process crash or failed write mid-way never leaves a
+ * truncated/corrupted file at `path` — readers only ever see the old
+ * complete file or the new complete file, never a partial one.
+ */
+export function writeFileAtomic(path: string, content: string): void {
+  const dir = dirname(path);
+  mkdirSync(dir, { recursive: true });
+  const tempPath = join(dir, `.tmp-${randomUUID()}-${basename(path)}`);
+  writeFileSync(tempPath, content, "utf-8");
+  renameSync(tempPath, path);
 }

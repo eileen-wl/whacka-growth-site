@@ -3,6 +3,13 @@ import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { resolveSnapshotPath, writeSnapshotFile } from "../lib/collector-fs";
+import {
+  PeriodMismatchError,
+  findMatchingFiles as findMatchingFilesShared,
+  multipleMatchesNotice,
+  selectLatestSnapshot as selectLatestSnapshotShared,
+  assertPeriodMatches as assertPeriodMatchesShared,
+} from "../lib/snapshot-discovery";
 import { buildGrowthSummary } from "../normalizers/growth-summary";
 import type { GA4Snapshot } from "../types/ga4";
 import type { GSCSnapshot } from "../types/gsc";
@@ -78,10 +85,6 @@ export function assertValidDateRange(start: string, end: string): void {
   }
 }
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
 export interface FileSystemDeps {
   listDir: (dir: string) => string[];
   readFile: (path: string) => string;
@@ -92,16 +95,14 @@ const defaultDeps: FileSystemDeps = {
   readFile: (path) => readFileSync(path, "utf-8"),
 };
 
-/** Matches `{prefix}-{start}_to_{end}.json` and its timestamped collision variants. */
-export function findMatchingFiles(dir: string, prefix: string, period: DateRange, listDir: FileSystemDeps["listDir"]): string[] {
-  const base = `${prefix}-${period.start}_to_${period.end}`;
-  const pattern = new RegExp(`^${escapeRegExp(base)}(\\.[^.]+)?\\.json$`);
-  return listDir(dir).filter((name) => pattern.test(name));
-}
-
 interface Dated {
   collectedAt: string;
   period: DateRange;
+}
+
+/** Matches `{prefix}-{start}_to_{end}.json` and its timestamped collision variants. See growth/lib/snapshot-discovery.ts. */
+export function findMatchingFiles(dir: string, prefix: string, period: DateRange, listDir: FileSystemDeps["listDir"]): string[] {
+  return findMatchingFilesShared(dir, prefix, period, listDir);
 }
 
 /** Picks the matching file with the latest `collectedAt`, per the "select the most recent snapshot" rule. */
@@ -110,24 +111,16 @@ export function selectLatestSnapshot<T extends Dated>(
   filenames: string[],
   readFile: FileSystemDeps["readFile"]
 ): { filename: string; snapshot: T } | undefined {
-  let best: { filename: string; snapshot: T } | undefined;
-
-  for (const filename of filenames) {
-    const snapshot = JSON.parse(readFile(join(dir, filename))) as T;
-    if (!best || snapshot.collectedAt > best.snapshot.collectedAt) {
-      best = { filename, snapshot };
-    }
-  }
-
-  return best;
+  return selectLatestSnapshotShared<T>(dir, filenames, readFile, (snapshot) => snapshot.collectedAt);
 }
 
+/** Throws NormalizeInputError (not the shared PeriodMismatchError) so callers only need to handle this script's own error types. */
 export function assertPeriodMatches(sourceLabel: string, snapshotPeriod: DateRange, requestedPeriod: DateRange): void {
-  if (snapshotPeriod.start !== requestedPeriod.start || snapshotPeriod.end !== requestedPeriod.end) {
-    throw new NormalizeInputError(
-      `${sourceLabel} snapshot's period (${snapshotPeriod.start} to ${snapshotPeriod.end}) does not match ` +
-        `the requested period (${requestedPeriod.start} to ${requestedPeriod.end}).`
-    );
+  try {
+    assertPeriodMatchesShared(sourceLabel, snapshotPeriod, requestedPeriod);
+  } catch (err) {
+    if (err instanceof PeriodMismatchError) throw new NormalizeInputError(err.message);
+    throw err;
   }
 }
 
@@ -136,10 +129,6 @@ interface LoadedSnapshot<T> {
   snapshot: T;
   /** Set when multiple timestamped snapshots matched and one was picked by latest collectedAt. */
   notice?: string;
-}
-
-function multipleMatchesNotice(sourceLabel: string, filename: string): string {
-  return `Multiple ${sourceLabel} snapshots found for this range; selected "${filename}" (latest collectedAt).`;
 }
 
 /** Loads a required raw snapshot (PostHog/GA4). Throws NormalizeInputError with the expected filename/range if missing. */

@@ -23,4 +23,8 @@ studio/.env
 growth/data/raw/*.json
 growth/data/processed/*.json
 
+# generated growth reports (keep the folder via .gitkeep)
+growth/reports/*.json
+growth/reports/*.md
+
 /secrets/
