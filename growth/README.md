@@ -5,8 +5,11 @@ sources into dated local snapshots (`growth/data/raw/`), for the Growth
 Report Agent (not yet built) to consume downstream. Nothing in this
 directory runs in the browser or ships with the Astro build.
 
-Currently implemented: **PostHog**, **GA4**, and **Search Console**. Whacka
-conversion data is a future collector, not yet built.
+Collectors implemented: **PostHog**, **GA4**, and **Search Console**. Whacka
+conversion data is a future collector, not yet built. A deterministic
+**Normalizer** (see below) turns those three raw snapshots into one
+processed growth-summary file — that's what the future Growth Report Agent
+will actually read.
 
 ## PostHog collector
 
@@ -290,3 +293,138 @@ finalized.
 | `Search Console query ("...") failed: ... 404 ...` | `GSC_SITE_URL` doesn't match a property that exists (or the account can't see it). |
 | `GSC_SITE_URL "..." is not a valid Search Console property` (again) | You passed a bare domain instead of a full URL-prefix or `sc-domain:` value. |
 | Empty `rows` in the saved snapshot | Not an error — see "Empty report behavior" above. |
+
+## Normalizer
+
+### What it is, and why Agents should read it instead of raw platform files
+
+The three collectors above each speak their source's native API shape:
+PostHog's grouped HogQL rows, GA4's `dimensionValues`/`metricValues` arrays
+with `YYYYMMDD` dates, Search Console's `keys` arrays. That's fine for a
+collector — it's just relaying what the API said — but it's the wrong
+shape for anything that reasons about the data. Three different date
+formats, three different "what counts as a unique user" answers, and three
+different empty/missing conventions is a lot of platform-specific trivia
+to re-derive correctly every time something needs "sessions this week."
+
+`growth/normalizers/growth-summary.ts` (invoked by
+`growth/scripts/normalize-growth-data.ts`) is a **deterministic,
+non-LLM** transform: same three raw snapshots in, same processed JSON out,
+every time. It does the boring-but-easy-to-get-wrong parts once — additive
+sums vs. recomputed rates vs. "this can't be safely summed, so it's
+`null`" — so the future Growth Report Agent (and Experiment Decision
+Agent) can read one stable schema instead of three raw API shapes, and so
+that reasoning about "why is this number what it is" never depends on an
+LLM's arithmetic. See `growth/types/growth-summary.ts` for the full output
+type.
+
+### Required raw files and the matching date-range requirement
+
+The normalizer looks for exactly one raw snapshot per source for the
+**requested** `--start`/`--end` range:
+
+```
+growth/data/raw/posthog-{start}_to_{end}*.json   (required)
+growth/data/raw/ga4-{start}_to_{end}*.json       (required)
+growth/data/raw/gsc-{start}_to_{end}*.json       (optional)
+```
+
+The `*` matches the collision-safe timestamp suffix collectors append when
+a snapshot for that range already exists (see each collector's "Collision
+handling" above) — if more than one matches, the one with the latest
+`collectedAt` is used, and the CLI prints a notice saying which file it
+picked. PostHog and GA4 are required for v0 and normalization **fails
+immediately**, naming the expected filename and date range, if either is
+missing. Search Console is optional: a missing file is accepted with a
+warning (`inputs.searchConsole.status: "missing"`); a file whose four
+reports all have zero rows is also accepted, marked `"empty"` instead of
+`"missing"`.
+
+Every selected snapshot's own `period` field is checked against the
+requested range — a raw file that doesn't actually cover the range you
+asked for is rejected rather than silently normalized as if it did.
+
+### Running it
+
+```bash
+npm run growth:normalize -- --start 2026-07-08 --end 2026-07-14
+
+# Optional: override the default campaign metadata
+npm run growth:normalize -- --start 2026-07-08 --end 2026-07-14 \
+  --campaign-id small_business_toolkit_v0 \
+  --campaign-name "Small Business Mini App Toolkit"
+
+# Re-run the same range without creating a timestamped duplicate file
+npm run growth:normalize -- --start 2026-07-08 --end 2026-07-14 --overwrite
+```
+
+`--start`/`--end` are required (ISO `YYYY-MM-DD`) — unlike the collectors,
+there's no "last 7 days" default here, since guessing a range risks
+silently normalizing against raw files that don't exist for it.
+
+### Output
+
+```
+growth/data/processed/growth-summary-{start}_to_{end}.json
+```
+
+Same collision convention as the collectors: an existing summary for that
+exact range is never overwritten silently — a timestamp suffix is used
+unless you pass `--overwrite`. These files are git-ignored
+(`growth/data/processed/*.json`).
+
+### What "partial" data quality means
+
+`dataQuality.overallStatus` is almost always `"partial"` right now, and
+that's expected, not a bug. It reflects real, current measurement gaps —
+not a broken pipeline:
+
+- Whacka product-side conversion data (signups, first app created, app
+  published) isn't connected yet — `productConversions.status` is always
+  `"not_connected"` and those fields are always `null`, never `0`.
+- Search Console may have no data yet for a brand-new property, or may be
+  missing for the range.
+- Certain unique-user metrics genuinely cannot be derived from the current
+  raw snapshots (see below) — they're `null` with an explanatory note
+  rather than a wrong number.
+
+`overallStatus` is `"complete"` only when none of the above apply and
+there are zero data-quality warnings; it's `"invalid"` if a selected
+snapshot's period didn't actually match the requested range (defense in
+depth — the loader already rejects this before normalization runs).
+
+### Why `activeUsers` and grouped unique-user counts need special handling
+
+Both GA4 and PostHog can tell you "how many distinct people did X on day
+N," but neither raw snapshot gives you "how many distinct people did X
+across the whole period" for free — and naively adding up the daily/grouped
+numbers produces a number that's too high, silently, with no indication
+anything's wrong:
+
+- **GA4 `activeUsers`**: the same visitor can be active on multiple days
+  within the range, so summing `trafficOverview`'s daily `activeUsers`
+  rows double-counts them. The normalizer only reports
+  `traffic.overview.activeUsers` when GA4's response includes a genuine
+  period-level total (via `metricAggregations`, which the current
+  collector doesn't request); otherwise it's `null` with
+  `activeUsersMeasurementNote` explaining why, plus a data-quality warning.
+- **PostHog grouped `unique_users`**: the raw snapshot's `unique_users`
+  column is a per-*group* distinct count (grouped by date/event/app/utm/…),
+  and the same `distinct_id` can appear in multiple groups (e.g. one
+  person who both viewed a demo and copied a prompt). Summing those grouped
+  values isn't a valid site-wide unique-user count, so
+  `behavior.uniqueUsers` is always `null` in the current design, with
+  `uniqueUsersMeasurementNote` and a matching warning.
+
+Event *counts* (not user counts) are safe to sum in both cases, because
+the grouped/daily rows partition the underlying events — that's why
+`eventTotals`, `traffic.overview.sessions`, etc. are ordinary additive
+sums.
+
+### Current Whacka attribution placeholder
+
+`productConversions` (`signups`, `firstAppCreated`, `appPublished`) is
+always `null` with `status: "not_connected"` — this is a placeholder for a
+not-yet-built Whacka product-side collector, not a real "zero conversions"
+result. Never treat these `null`s as `0`; a future collector will populate
+them once Whacka's product-side attribution is connected.

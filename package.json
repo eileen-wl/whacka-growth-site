@@ -13,6 +13,7 @@
     "growth:collect:posthog": "tsx growth/scripts/collect-posthog.ts",
     "growth:collect:ga4": "tsx growth/scripts/collect-ga4.ts",
     "growth:collect:gsc": "tsx growth/scripts/collect-gsc.ts",
+    "growth:normalize": "tsx growth/scripts/normalize-growth-data.ts",
     "test": "vitest run"
   },
   "dependencies": {
