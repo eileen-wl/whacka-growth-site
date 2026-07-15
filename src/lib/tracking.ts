@@ -45,6 +45,7 @@ type PosthogCaptureFn = (
 
 declare global {
   interface Window {
+    dataLayer?: unknown[];
     gtag?: GtagFn;
     posthog?: { capture: PosthogCaptureFn };
   }
