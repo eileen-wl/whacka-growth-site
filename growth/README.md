@@ -5,8 +5,8 @@ sources into dated local snapshots (`growth/data/raw/`), for the Growth
 Report Agent (not yet built) to consume downstream. Nothing in this
 directory runs in the browser or ships with the Astro build.
 
-Currently implemented: **PostHog** and **GA4**. Search Console and Whacka
-conversion data are future collectors, not yet built.
+Currently implemented: **PostHog**, **GA4**, and **Search Console**. Whacka
+conversion data is a future collector, not yet built.
 
 ## PostHog collector
 
@@ -164,3 +164,129 @@ overwritten silently — a timestamp suffix is used unless you pass
 | `GA4 runReport ("...") failed: ... 7 PERMISSION_DENIED ...` | Your ADC-logged-in account lacks Viewer access to this GA4 property. |
 | `GA4 runReport ("...") failed: Could not load the default credentials ...` | You haven't run `gcloud auth application-default login` yet (or it expired). |
 | `Unexpected GA4 response shape for report "...": ...` | GA4 returned a response without the expected headers/rows arrays. |
+
+## Search Console collector
+
+### Prerequisites
+
+1. **Enable the API** for your Google Cloud project (one-time): visit
+   https://console.developers.google.com/apis/api/searchconsole.googleapis.com
+   and click Enable, or run:
+
+   ```bash
+   gcloud services enable searchconsole.googleapis.com
+   ```
+
+2. **Log in with the read-only scope** via Application Default Credentials:
+
+   ```bash
+   gcloud auth application-default login --scopes=https://www.googleapis.com/auth/webmasters.readonly,https://www.googleapis.com/auth/cloud-platform
+   ```
+
+   Like the GA4 collector, `growth/collectors/gsc.ts` builds a
+   `google.auth.GoogleAuth` client with no explicit credentials and lets
+   the Google client library discover ADC on its own. There is no
+   service-account JSON file, and no `secrets/google-oauth-client.json` or
+   similar is read directly by this codebase.
+
+3. The logged-in ADC principal needs access to the property in **Search
+   Console → Settings → Users and permissions** (any permission level —
+   Owner isn't required for read-only queries).
+
+### Required environment variable: `GSC_SITE_URL`
+
+Set this to your Search Console property **exactly** as it's registered —
+this collector never adds or strips a trailing slash, since a mismatched
+value won't resolve to your property at all. Two formats are accepted:
+
+| Property type | Format | Example |
+| --- | --- | --- |
+| URL-prefix | `http://` or `https://`, including the trailing slash if that's how the property is registered | `https://example.com/` |
+| Domain | `sc-domain:` followed by the bare domain (no protocol) | `sc-domain:example.com` |
+
+A plain domain with no `sc-domain:` prefix (e.g. `example.com`) is
+**rejected** — Search Console can't tell that apart from a malformed
+URL-prefix property.
+
+### Running it
+
+```bash
+# Default: last 7 complete Search Console calendar days, ending yesterday
+npm run growth:collect:gsc
+
+# Custom range (ISO dates only, YYYY-MM-DD)
+npm run growth:collect:gsc -- --start 2026-07-01 --end 2026-07-15
+
+# Re-run the same range without creating a timestamped duplicate file
+npm run growth:collect:gsc -- --start 2026-07-01 --end 2026-07-15 --overwrite
+```
+
+**Important:** Search Console's date fields are defined by the API in
+`America/Los_Angeles` time (PST/PDT), not UTC. The default range's
+"yesterday" is computed on that calendar, so it can differ from the
+PostHog/GA4 collectors' UTC-based default by a day depending on when you
+run it.
+
+Each run calls the Search Console Search Analytics `searchanalytics.query`
+method four times against `siteUrl: GSC_SITE_URL`, all for the same date
+range, `searchType: "web"`, `dataState: "all"` (includes not-yet-finalized
+data, so the future normalizer can watch for it via each report's
+`metadata.firstIncompleteDate`):
+
+| Report | Dimensions |
+| --- | --- |
+| `daily_overview` | `date` |
+| `queries` | `query` |
+| `query_pages` | `query`, `page` |
+| `pages` | `page` |
+
+Each row keeps `keys`, `clicks`, `impressions`, `ctr`, and `position`
+exactly as the API returns them — no aggregation or interpretation here.
+
+### Pagination
+
+Each report pages through results at the API's maximum `rowLimit` (25,000)
+using `startRow`, stopping as soon as a page comes back with fewer than
+25,000 rows (which includes an empty page). A 1,000-page safety cap
+(25M rows) throws rather than looping forever if the API ever behaves
+unexpectedly. Search Console's `rows` are the API's own top results for
+the query — collecting every page it returns is not a guarantee that every
+internal row imaginable has been retrieved.
+
+### Output
+
+Snapshots are written to:
+
+```
+growth/data/raw/gsc-{start}_to_{end}.json
+```
+
+containing `source`, `collectedAt`, `period`, `siteUrl`, and a `reports`
+object with one entry per report (`dailyOverview`, `queries`,
+`queryPages`, `pages`), each holding `dimensions`, `rows`, `rowCount`,
+`responseAggregationType`, and `metadata`. Same collision convention as
+the other collectors: an existing file for that exact range is never
+overwritten silently — a timestamp suffix is used unless you pass
+`--overwrite`. These files are git-ignored (`growth/data/raw/*.json`).
+
+### Empty report behavior
+
+A report with 0 rows is **not** treated as an error — it's saved as-is
+(`rows: []`, `rowCount: 0`) and the CLI prints a warning per empty report
+instead of failing. This is expected for a new site with no search
+impressions yet, or for very recent dates that Search Console hasn't
+finalized.
+
+### Common errors
+
+| Error | Cause |
+| --- | --- |
+| `Missing required environment variable: GSC_SITE_URL` | Not set in `.env`. |
+| `GSC_SITE_URL "..." is not a valid Search Console property` | Value doesn't start with `http://`, `https://`, or `sc-domain:`, contains whitespace, or is a malformed URL. |
+| `Invalid --start/--end date "..."` / `--start (...) must not be after --end (...)` | Same date validation as the other collectors. |
+| `Search Console query ("...") failed: ... 403 ... insufficient authentication scopes ...` | Your ADC login didn't include `webmasters.readonly` — re-run the `gcloud auth application-default login --scopes=...` command above. |
+| `Search Console query ("...") failed: ... 403 ... has not been used ... or it is disabled ...` | The Search Console API isn't enabled on your Google Cloud project — see Prerequisites. |
+| `Search Console query ("...") failed: ... 403 ... does not have sufficient permission ...` | Your ADC-logged-in account isn't added as a user on this property in Search Console. |
+| `Search Console query ("...") failed: ... 404 ...` | `GSC_SITE_URL` doesn't match a property that exists (or the account can't see it). |
+| `GSC_SITE_URL "..." is not a valid Search Console property` (again) | You passed a bare domain instead of a full URL-prefix or `sc-domain:` value. |
+| Empty `rows` in the saved snapshot | Not an error — see "Empty report behavior" above. |

@@ -12,6 +12,7 @@
     "seed": "tsx scripts/seed.ts",
     "growth:collect:posthog": "tsx growth/scripts/collect-posthog.ts",
     "growth:collect:ga4": "tsx growth/scripts/collect-ga4.ts",
+    "growth:collect:gsc": "tsx growth/scripts/collect-gsc.ts",
     "test": "vitest run"
   },
   "dependencies": {
@@ -19,6 +20,7 @@
     "@google-analytics/data": "^6.1.0",
     "@sanity/client": "^7.23.0",
     "astro": "^4.16.0",
+    "googleapis": "^173.0.0",
     "posthog-js": "^1.399.1"
   },
   "devDependencies": {
