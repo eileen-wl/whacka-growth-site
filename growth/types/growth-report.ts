@@ -1,7 +1,8 @@
 import { z } from "zod/v4";
 import type { CampaignInfo, DateRange, GrowthSummary } from "./growth-summary";
+import type { SupportedLanguage } from "./llm";
 
-export type SupportedLanguage = "en" | "zh-CN";
+export type { LLMStructuredResult, SupportedLanguage } from "./llm";
 
 // ---------------------------------------------------------------------------
 // Structured LLM analysis schema (zod v4 — required by @anthropic-ai/sdk's
@@ -152,17 +153,6 @@ export interface GrowthReportLLMRequest {
   maxTokens: number;
   systemPrompt: string;
   userPrompt: string;
-}
-
-/** A provider's result, with only non-sensitive metadata preserved (never credentials/tokens/headers). */
-export interface LLMStructuredResult<T> {
-  data: T;
-  provider: string;
-  model: string;
-  requestId: string | null;
-  stopReason: string | null;
-  inputTokens: number | null;
-  outputTokens: number | null;
 }
 
 // ---------------------------------------------------------------------------

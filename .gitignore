@@ -27,4 +27,8 @@ growth/data/processed/*.json
 growth/reports/*.json
 growth/reports/*.md
 
+# generated experiment decisions (keep the folder via .gitkeep)
+growth/decisions/*.json
+growth/decisions/*.md
+
 /secrets/

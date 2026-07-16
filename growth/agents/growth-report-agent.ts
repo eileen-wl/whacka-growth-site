@@ -1,3 +1,4 @@
+import { ensureUniqueId, slugify } from "../lib/ids";
 import { buildGrowthReportLLMRequest } from "../prompts/growth-report-prompt";
 import { growthReportAnalysisSchema } from "../types/growth-report";
 import type { LLMProvider } from "../llm/provider";
@@ -16,27 +17,6 @@ import type {
 const EVIDENCE_TOP_N = 5;
 
 export class GrowthReportValidationError extends Error {}
-
-function slugify(value: string): string {
-  const slug = value
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]+/g, "_")
-    .replace(/^_+|_+$/g, "");
-  return slug.length > 0 ? slug : "unknown";
-}
-
-function ensureUniqueId(baseId: string, used: Set<string>): string {
-  if (!used.has(baseId)) {
-    used.add(baseId);
-    return baseId;
-  }
-  let suffix = 2;
-  while (used.has(`${baseId}_${suffix}`)) suffix++;
-  const id = `${baseId}_${suffix}`;
-  used.add(id);
-  return id;
-}
 
 /**
  * Builds the deterministic, citable evidence catalog from a normalized

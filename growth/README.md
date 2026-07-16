@@ -1,16 +1,18 @@
-# Growth data collectors, Normalizer, and Growth Report Agent
+# Growth data collectors, Normalizer, Growth Report Agent, and Experiment Decision Agent
 
 Server-side scripts that pull raw growth-event data from external analytics
 sources into dated local snapshots (`growth/data/raw/`), normalize them into
-one processed growth-summary file (`growth/data/processed/`), and generate
-an LLM-assisted Growth Report from that summary (`growth/reports/`).
+one processed growth-summary file (`growth/data/processed/`), generate an
+LLM-assisted Growth Report from that summary (`growth/reports/`), and
+finally produce an Experiment Decision from that report (`growth/decisions/`).
 Nothing in this directory runs in the browser or ships with the Astro build.
 
 Collectors implemented: **PostHog**, **GA4**, and **Search Console**. Whacka
 conversion data is a future collector, not yet built. A deterministic
 **Normalizer** turns those three raw snapshots into one processed
-growth-summary file, which the **Growth Report Agent** (see below) reads to
-produce a JSON + Markdown report.
+growth-summary file, which the **Growth Report Agent** reads to produce a
+JSON + Markdown report, which the **Experiment Decision Agent** (see below)
+in turn reads to record — but not execute — the next bounded experiment.
 
 ## PostHog collector
 
@@ -595,4 +597,228 @@ a number for it.
 | `Anthropic refused to generate a structured report ...` / `... was truncated at the max_tokens limit ...` | `stop_reason` was `refusal` / `max_tokens` — see growth/llm/anthropic-provider.ts. |
 | `Model response referenced unknown evidence ID(s): ...` | The model cited an ID not in the evidence catalog — the report is rejected, not patched. |
 | `Model response did not match the required schema: ...` | Zod validation failed (bad enum, unknown key, too-short array, etc.). |
+
+## Experiment Decision Agent
+
+### Role in the fixed Growth Loop, and how it differs from the Growth Report Agent
+
+This is step 8 of the confirmed Growth Loop — the last step before results
+feed back into the next Signal Mining / Topic Pool cycle:
+
+1. Signal Mining Agent · 2. Topic Scoring Agent · 3. Asset Generation Agent ·
+4. CMS Writer · 5. Growth Site Engine · 6. Tracking Layer ·
+**7. Growth Report Agent** · **8. Experiment Decision Agent** ·
+9. results return to the next Signal / Topic Pool cycle
+
+The two LLM agents have a strict, deliberate division of labor:
+
+- **Growth Report Agent** *explains what happened* — observed facts,
+  interpretations, disclosed limitations, and a set of decision inputs. It
+  never picks a next step.
+- **Experiment Decision Agent** *chooses or defers* the next bounded
+  experiment, using only that report's evidence, findings, and limitations
+  as its inputs. It compares evidence-backed options, ranks them, and
+  either recommends exactly one or explicitly defers — but it **records** a
+  decision, it does not **execute** one. There is no code path anywhere in
+  this Agent that publishes an experiment, edits the CMS, changes the site,
+  or picks a distribution channel; every decision file it writes carries
+  `humanReview.required: true` and `humanReview.approved: false` by
+  construction.
+
+### Why it reads the final Growth Report, not raw analytics
+
+Like the Growth Report Agent reads the Normalizer's output instead of raw
+platform files, the Experiment Decision Agent reads only the **final
+Growth Report JSON** (`growth/reports/growth-report-*.json` — never the
+`.md` brief, and never `growth-summary-*.json` or any raw PostHog/GA4/
+Search Console snapshot). The report already did the work of turning
+platform-specific data into evidence-graded findings with disclosed
+limitations; re-deriving that from raw data a second time inside a
+decision prompt would just reintroduce the same failure modes (wrong
+date formats, double-counted unique users, event-count-as-conversion-rate
+mistakes) in a second, harder-to-audit place.
+
+### Why it may defer instead of always recommending something
+
+`decisionStatus` is `"proceed"` or `"defer"` — deferring is a **valid,
+expected outcome**, not a failure mode, and the system prompt says so
+explicitly. Examples of when deferring is the right call: the source
+Growth Report is mock-generated, there's almost no traffic, no topic/CTA
+shows meaningful variation, channel attribution is absent, Search Console
+is empty and the decision would depend on it, or the evidence supports
+multiple incompatible interpretations. A deferred decision still explains
+what's missing (`deferDecision.missingEvidence`), what to observe next
+(`requiredNextObservations`), and what would unblock a real decision
+(`earliestDecisionCondition`) — it's a structured "not yet," not silence.
+
+### Why it cannot invent a new topic or channel before Signal Mining
+
+`decisionScope` (`availableTopics`, `availableCtaTypes`, `availableChannels`)
+is built **deterministically from the Growth Report's own metrics** —
+observed app slugs/names (excluding the synthetic `"unassigned"` bucket),
+CTA types with at least one observed click this period, and GA4/PostHog
+channel combinations that actually appear in the data. The system prompt
+forbids targeting anything outside this scope, and the Agent's own
+validation rejects a response that tries. Discovering genuinely new topics
+or channels is Signal Mining's job (step 1) — by the time this Agent runs,
+that discovery hasn't happened yet for anything not already observed, so
+proposing e.g. a TikTok channel or an unbuilt app here would be
+unfounded, not evidence-backed.
+
+### Provider-neutral architecture (shared with the Growth Report Agent)
+
+```
+growth/agents/experiment-decision-agent.ts       — orchestration; imports only
+                                                    growth/llm/experiment-decision-provider.ts's
+                                                    interface, never an SDK directly
+growth/llm/experiment-decision-provider.ts       — the ExperimentDecisionProvider interface
+                                                    (re-exports the same LLMProviderConfigError/
+                                                    LLMProviderResponseError as the Growth Report Agent)
+growth/llm/mock-experiment-decision-provider.ts  — no API key, no network call
+growth/llm/anthropic-experiment-decision-provider.ts — the only file here that imports @anthropic-ai/sdk
+growth/llm/anthropic-structured-client.ts        — shared by BOTH Anthropic providers: client
+                                                    construction, structured-call execution, and
+                                                    SDK error sanitization live here exactly once
+growth/prompts/experiment-decision-prompt.ts     — system/user prompt construction
+growth/renderers/experiment-decision-markdown.ts — pure JSON -> Markdown renderer
+```
+
+Building this Agent required one small, behavior-preserving refactor of
+the existing Growth Report Agent infrastructure: `SupportedLanguage` and
+`LLMStructuredResult<T>` moved to a task-neutral `growth/types/llm.ts`
+(re-exported from `growth/types/growth-report.ts` unchanged, so nothing
+importing them broke), and the Growth Report Agent's Anthropic client
+construction / structured-request execution / error-mapping logic moved
+into the new shared `anthropic-structured-client.ts`, with
+`AnthropicGrowthReportProvider` becoming a thin wrapper around it. The
+Growth Report Agent's public API, CLI, output schema, filenames, and full
+test suite (122 tests) were re-verified unchanged after the refactor.
+
+### Environment variables and fallback resolution
+
+Reuses `ANTHROPIC_API_KEY`. Provider and model each resolve through a
+fallback chain, so both agents use the same Anthropic provider/model by
+default while still allowing a separate decision-specific one later:
+
+| Setting | Resolution order |
+| --- | --- |
+| Provider | `--provider` flag → `EXPERIMENT_DECISION_LLM_PROVIDER` → `GROWTH_REPORT_LLM_PROVIDER` → configuration error (live runs only) |
+| Model | `EXPERIMENT_DECISION_MODEL` → `GROWTH_REPORT_MODEL` → configuration error (live Anthropic runs only) |
+| Max tokens | `EXPERIMENT_DECISION_MAX_TOKENS` → defaults to `6000` |
+
+`--dry-run` and `--provider mock` need none of this — no provider, model,
+or API key required.
+
+### Running it
+
+```bash
+# Dry run: loads the Growth Report, builds the decision scope and
+# catalogs, writes a request preview — no provider call, no key/model needed.
+npm run growth:decide -- --start 2026-07-08 --end 2026-07-14 --dry-run
+
+# Full local pipeline with the Mock Provider — no key, no network call.
+npm run growth:decide -- --start 2026-07-08 --end 2026-07-14 --provider mock
+
+# Future live run, once ANTHROPIC_API_KEY and a resolved model are set:
+npm run growth:decide -- --start 2026-07-08 --end 2026-07-14
+
+# Other flags: --input <file>, --language en|zh-CN (default en), --overwrite,
+# --allow-mock-input (see below)
+```
+
+### `--allow-mock-input`
+
+The source Growth Report's `generation.isMock` flag records whether *that*
+report came from the Mock Provider. Both `--dry-run` and `--provider mock`
+may freely consume a mock-generated Growth Report (useful for pipeline
+testing) — but a **live Anthropic run refuses a mock-generated Growth
+Report by default**, since recommending a real experiment from placeholder
+analysis would be misleading. Pass `--allow-mock-input` to override this
+for explicit testing only. Every decision file's `provenance.sourceGrowthReportIsMock`
+records the source report's mock status regardless, and the Markdown brief
+surfaces it prominently.
+
+### Output locations
+
+```
+growth/data/processed/experiment-decision-request-{start}_to_{end}.json   (--dry-run preview)
+growth/decisions/experiment-decision-{start}_to_{end}.json                (Mock/live run)
+growth/decisions/experiment-decision-{start}_to_{end}.md                  (Mock/live run)
+```
+
+Same collision convention as every other script here — timestamp suffix
+unless `--overwrite` — and the same atomic (write-temp-then-rename) file
+writes. Generated decisions are git-ignored (`growth/decisions/*.json`,
+`growth/decisions/*.md`); only `.gitkeep` is committed.
+
+### Evidence, finding, and limitation reference validation
+
+The Agent never lets the model invent an ID. Three catalogs are built
+deterministically before any provider call:
+
+- **Evidence catalog** — reused directly from the source Growth Report,
+  unmodified.
+- **Finding catalog** — the Growth Report's own findings, wrapped with
+  stable IDs (`finding.{growthReportFindingId}`).
+- **Limitation catalog** — deterministic, code-derived limitations:
+  `data_limit.product_conversions_not_connected` (always present),
+  `data_limit.search_console_empty` / `data_limit.search_console_missing`
+  (when applicable), `data_limit.mock_growth_report` (when the source
+  report is mock), `data_limit.partial_data_quality` (when data quality
+  is `"partial"`), plus the Growth Report's own disclosed
+  `dataLimitations` carried over under `data_limit.from_report.*` IDs.
+
+After the model responds, the Agent checks — and rejects the whole
+response, writing nothing, if any check fails — that: every
+`evidenceRefs`/measurement-metric reference exists in the evidence
+catalog and is numeric (not a categorical value like `"ok"`); every
+`findingRefs` value exists in the finding catalog; every `limitationRefs`
+value exists in the limitation catalog; every non-null `target.topicOrApp`/
+`ctaType`/`channel` exists in `decisionScope`; option ranks are unique and
+sequential from 1; option IDs are unique; and the `proceed`/`defer` fields
+are internally consistent (e.g. `proceed` requires a non-null
+`recommendedExperiment` whose `experimentId` matches an actual option,
+`defer` requires both to be null).
+
+### Human-review requirement
+
+Every decision file's `humanReview` object is fixed by the Agent, never by
+the model: `required: true`, `approved: false`, `approvedBy: null`,
+`approvedAt: null`. There is no code in this Agent (or anywhere in this
+codebase yet) that flips `approved` to `true` or acts on a decision —
+approval and execution are out of scope for this step, by design.
+
+### Known limitations this Agent explicitly respects
+
+- **Search Console empty**: if `search.status` is `"empty"` or
+  `"missing"`, the system prompt forbids recommending a topic based on
+  claimed search demand or SEO performance, and a
+  `data_limit.search_console_*` entry is always added to the limitation
+  catalog when applicable.
+- **Whacka product attribution missing**: `signups`/`firstAppCreated`/
+  `appPublished` are always `null` — the prompt forbids optimizing for
+  them or treating `null` as `0`, and
+  `data_limit.product_conversions_not_connected` is always in the
+  limitation catalog.
+- **Event-based CTA ratio**: `behavior.event_based_cta_rate` (from the
+  Growth Report) may be used as a proxy engagement metric, but the prompt
+  requires it be labeled an event-count ratio — never a user or session
+  conversion rate.
+
+### Common errors
+
+| Error | Cause |
+| --- | --- |
+| `growth:decide requires --start and --end ...` | Missing `--start`/`--end` (required even with `--input`). |
+| `No Growth Report found for ... — run growth:report for this range first.` | No matching `growth-report-*.json` in `growth/reports/`. |
+| `"..." does not match the expected Growth Report schema ...` | The input file isn't shaped like a Growth Report Agent output. |
+| `"..." contains evidenceRefs not present in its own evidenceCatalog: ...` | The source Growth Report itself is internally inconsistent — rejected before any decision is attempted. |
+| `... has dataQuality.overallStatus = "invalid" ...` | The source report's own data quality was invalid; `"partial"` is fine, `"invalid"` is refused. |
+| `Growth Report snapshot's period (...) does not match the requested period (...)` | The selected/`--input` file covers a different date range than `--start`/`--end`. |
+| `The selected Growth Report ("...") was mock-generated ... pass --allow-mock-input to override` | Live Anthropic mode with a mock-generated source report and no override. |
+| `No LLM provider configured. Pass --provider mock ...` | No provider resolved from `--provider`, `EXPERIMENT_DECISION_LLM_PROVIDER`, or `GROWTH_REPORT_LLM_PROVIDER`, and this isn't a dry run. |
+| `No Anthropic model resolved (checked EXPERIMENT_DECISION_MODEL, then GROWTH_REPORT_MODEL) ...` | Live Anthropic mode with neither model variable set. |
+| `Model response referenced unknown evidence ID(s)/finding ID(s)/limitation ID(s): ...` | The model cited an ID outside the supplied catalogs — rejected, not patched. |
+| `... targets a topic/app/CTA type/channel ("...") outside the supplied decision scope.` | The model proposed something not actually observed in the Growth Report. |
+| `Model response did not match the required schema: ...` | Zod validation failed (bad enum, unknown key, wrong array length, etc.). |
 
