@@ -822,3 +822,47 @@ approval and execution are out of scope for this step, by design.
 | `... targets a topic/app/CTA type/channel ("...") outside the supplied decision scope.` | The model proposed something not actually observed in the Growth Report. |
 | `Model response did not match the required schema: ...` | Zod validation failed (bad enum, unknown key, wrong array length, etc.). |
 
+## Front-Half Contracts
+
+`growth/contracts/` defines the shared data contracts for the front half of
+the fixed Growth Loop (steps 1–5) — **not an Agent itself**, and no Agent for
+Signal Mining, Topic Scoring, Asset Generation, or the CMS Writer exists yet.
+This directory only provides the strict Zod v4 schemas, TypeScript types,
+deterministic ID/compatibility helpers, and offline tests those future
+Agents will build on:
+
+```
+SignalCandidate
+→ TopicCandidate
+→ ScoredTopic
+→ AssetBundle
+→ CMSWriteRequest
+→ Sanity draft
+→ Astro
+
+ExperimentDecision
+→ GrowthLoopFeedback
+→ Signal Mining / Topic Pool
+```
+
+Highlights (full detail in `growth/contracts/README.md`):
+
+- `AssetBundle.app` maps field-for-field to the real Sanity `appTool`
+  schema (`studio/schemaTypes/appTool.ts`) and frontend `AppData` type
+  (`src/data/apps.ts`) — every field Sanity requires is required here too.
+  One discovered gap: Sanity has no SEO-specific fields today, so
+  `AssetBundle.seo.*` (besides `faq`, which does map) can't yet be
+  persisted by a `CMSWriteRequest`.
+- `CMSWriteRequest` is a request, not a write — nothing in this directory
+  calls `@sanity/client`. It's always `payload.status: "draft"` and
+  `publishing: { publishRequested: false, publishAllowed: false }`, pinned
+  to the literal `false` so no code path in this version can flip either.
+- `buildGrowthLoopFeedback(finalExperimentDecision, options)` is a pure,
+  deterministic adapter (no LLM/network/file-write) that turns step 8's
+  output into input for the next Signal Mining / Topic Pool cycle —
+  preserving proceed/defer status, `isMock`, and every evidence/finding/
+  limitation reference verbatim from the source decision.
+- Every contract carries `schemaVersion`, and every `validate*()` function
+  rejects an unsupported major version clearly (`UnsupportedSchemaVersionError`)
+  rather than silently misreading a breaking-changed document.
+
