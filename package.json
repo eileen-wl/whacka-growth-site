@@ -16,6 +16,7 @@
     "growth:normalize": "tsx growth/scripts/normalize-growth-data.ts",
     "growth:report": "tsx growth/scripts/generate-growth-report.ts",
     "growth:decide": "tsx growth/scripts/generate-experiment-decision.ts",
+    "growth:signals": "tsx growth/scripts/run-signal-mining.ts",
     "test": "vitest run"
   },
   "dependencies": {

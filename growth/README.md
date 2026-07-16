@@ -866,3 +866,201 @@ Highlights (full detail in `growth/contracts/README.md`):
   rejects an unsupported major version clearly (`UnsupportedSchemaVersionError`)
   rather than silently misreading a breaking-changed document.
 
+## Signal Mining Agent
+
+### Role in the fixed Growth Loop, and how it differs from Topic Scoring
+
+This is step 1 — the first step of the loop, and the one step 9 (results
+returning to "the next Signal / Topic Pool cycle") feeds back into:
+
+```
+**1. Signal Mining Agent** · 2. Topic Scoring Agent · 3. Asset Generation Agent ·
+4. CMS Writer · 5. Growth Site Engine · 6. Tracking Layer ·
+7. Growth Report Agent · 8. Experiment Decision Agent ·
+9. results return to the next Signal / Topic Pool cycle → back to step 1/2
+```
+
+Its job is **mining and normalizing, not judging**:
+
+- It collects currently-available opportunity signals from local,
+  deterministic sources (see below), converts them into validated
+  `SignalCandidate` contracts, deduplicates them, and clusters validated
+  signals into a `TopicCandidate` topic pool.
+- It never scores, ranks, or decides advance/hold/reject for a topic — the
+  system prompt explicitly forbids this, and neither the structured schema
+  nor the final output has anywhere to put a score. That's the **Topic
+  Scoring Agent**'s job (future work, not built yet).
+- It never generates app content, SEO copy, or social copy — that's the
+  **Asset Generation Agent**'s job (future work, not built yet).
+- It never writes to Sanity or touches the Astro site.
+
+### Currently supported local sources
+
+Three local, deterministic adapters (`growth/signal-sources/` — see that
+directory's own README for the adapter interface and how to add a future
+one):
+
+| Adapter | Reads | 
+| --- | --- |
+| `NormalizedGrowthSummaryAdapter` | An already-loaded, already-validated `GrowthSummary` (`growth-summary-{start}_to_{end}.json`) — GA4 acquisition/landing-page rows, PostHog per-app/per-UTM rows, Search Console query/page rows |
+| `GrowthLoopFeedbackAdapter` | An already-loaded, already-validated `GrowthLoopFeedback` (see below) |
+| `ManualJsonSignalAdapter` | An already-validated `--manual-input` JSON file (see below) |
+
+### Why live external adapters are not enabled yet
+
+Reddit, X, Product Hunt, Google Trends, search-volume tools, competitor
+crawling, and social scraping are all explicitly out of scope for this
+version — none has a confirmed, authorized integration yet (API access,
+ToS review, rate-limit handling), and building the Agent's core
+contract-assembly/deduplication logic against live network sources would
+make it impossible to test deterministically and offline. See
+`growth/signal-sources/README.md` for exactly how a future adapter plugs
+into the same `SignalSourceAdapter` interface without changing the Agent.
+
+### Growth Summary input behavior
+
+Reads only the normalized `growth-summary-{start}_to_{end}*.json` (never
+raw PostHog/GA4/Search Console snapshots directly) — same discovery
+convention as the Growth Report Agent (`--summary <path>` bypasses
+discovery, otherwise the latest-`generatedAt` match in
+`growth/data/processed/` is selected). A `"partial"` `dataQuality`
+status is accepted; `"invalid"` is refused. When Search Console is
+`"empty"` or `"missing"`, zero query/page source records are produced —
+never a fabricated keyword signal — and the empty/missing status is
+preserved as a factual data-quality warning instead.
+
+### GrowthLoopFeedback input behavior
+
+`--feedback <path>` loads and validates one `GrowthLoopFeedback` (see the
+Front-Half Contracts section above); when omitted, the CLI looks for
+`growth/decisions/growth-loop-feedback-{start}_to_{end}*.json` and
+continues without it (non-fatal notice) if none exists — nothing currently
+writes such a file, so in practice this just means "no feedback" today.
+Feedback is **an instruction and constraint source, not measured demand
+evidence** — its instructions become low-confidence source records (via
+`GrowthLoopFeedbackAdapter`) explicitly disclosing they're carried over
+from a prior Experiment Decision, and its `constraints`
+(`allowedTopics`/`allowedCtaTypes`/`allowedChannels`/`mustCollectEvidence`/
+`mustNotClaim`) are passed to the model as context, never as something it
+cites as evidence.
+
+### Mock feedback behavior
+
+`GrowthLoopFeedback.sourceDecision.isMock` records whether the underlying
+Experiment Decision was mock-generated. `--dry-run` and `--provider mock`
+may freely consume mock feedback. A **live Anthropic run refuses
+mock-generated feedback by default** — pass `--allow-mock-input` to
+override for explicit testing. `FinalSignalMiningRun.provenance.sourceFeedbackIsMock`
+always records this regardless, and the Markdown review surfaces it
+prominently.
+
+### Manual JSON input format
+
+`--manual-input <path>` accepts a JSON file containing either a bare array
+of records or `{ "records": [...] }`. See
+`growth/data/manual/signal-input.example.json` for a copyable template.
+Each record:
+
+```json
+{
+  "id": "optional_external_id",
+  "sourceType": "mentor_input",
+  "sourceName": "Weekly mentor meeting",
+  "title": "SMBs repeatedly ask for WhatsApp order handling",
+  "text": "Full source note or observation",
+  "url": null,
+  "publishedAt": null,
+  "capturedAt": "2026-07-15T18:00:00.000Z",
+  "tags": ["whatsapp", "orders", "smb"],
+  "metrics": [],
+  "metadata": {}
+}
+```
+
+`sourceType` is one of `mentor_input`, `user_feedback`, `manual`,
+`competitor_page`, `social_discussion`, `keyword_source`, `product_request`,
+`research_note`. `sourceType`/`sourceName`/`title`/`text` are required;
+`url` must be a valid URL when present; timestamps must be valid ISO 8601.
+A record containing a credential-shaped key (`apiKey`, `token`,
+`authorization`, `password`, `secret`, `cookie`, `accessToken` — at any
+nesting depth, including inside `metadata`) is rejected outright, naming
+its index — never silently stripped. `metadata` is validated but never
+forwarded to a provider. CSV input is not supported in this version.
+
+### Running it
+
+```bash
+# Dry run: loads inputs, builds the deterministic source record and
+# existing content catalogs, writes a request preview — no provider call.
+npm run growth:signals -- --start 2026-07-08 --end 2026-07-14 --dry-run
+
+# Full local pipeline with the Mock Provider — no key, no network call.
+npm run growth:signals -- --start 2026-07-08 --end 2026-07-14 --provider mock
+
+# Future live run, once ANTHROPIC_API_KEY and a resolved model are set:
+npm run growth:signals -- --start 2026-07-08 --end 2026-07-14
+
+# Other flags: --summary <path>, --feedback <path>, --manual-input <path>,
+# --language en|zh-CN (default en), --overwrite, --allow-mock-input
+```
+
+### Required live environment variables
+
+| Variable | Resolution |
+| --- | --- |
+| Provider | `--provider` → `SIGNAL_MINING_LLM_PROVIDER` → `GROWTH_REPORT_LLM_PROVIDER` → configuration error (live runs only) |
+| Model | `SIGNAL_MINING_MODEL` → `GROWTH_REPORT_MODEL` → configuration error (live Anthropic runs only) |
+| `SIGNAL_MINING_MAX_TOKENS` | Optional, defaults to `8000`. |
+| `SIGNAL_MINING_MAX_SOURCE_RECORDS` | Optional, defaults to `100` — the maximum source records used per run; higher-volume records are kept deterministically when the collected count exceeds this. |
+| `ANTHROPIC_API_KEY` | Any live Anthropic call. Never required for `--dry-run` or `--provider mock`. |
+
+### Output paths
+
+```
+growth/data/processed/signal-mining-request-{start}_to_{end}.json   (--dry-run preview)
+growth/signals/signal-mining-{start}_to_{end}.json                  (Mock/live run)
+growth/signals/signal-mining-{start}_to_{end}.md                    (Mock/live run)
+```
+
+Same collision convention, atomic writes, and git-ignored generated output
+(`growth/signals/*.json`, `growth/signals/*.md`, only `.gitkeep` committed)
+as every other script in this directory.
+
+### Source-record and contract traceability
+
+Every source record (`SignalSourceRecord` — an internal Agent input type,
+**not** a public front-half contract) has a deterministic id and is the
+only thing the model may cite by id (`sourceRecordRefs`). After the
+model's structured response is validated, `SignalCandidate` contracts are
+assembled deterministically: metrics are copied only from the cited source
+records (the model never invents or alters one), a deterministic id is
+derived from campaign + normalized title + sorted source-record ids, and
+exact/normalized duplicates (identical id, normalized title, or identical
+sorted source-record-ref set) are removed, with the count recorded in
+`deduplication`. `TopicCandidate` contracts resolve each cluster's
+temporary signal references to final `SignalCandidate` ids, and every
+`relatedAppSlugs` value is validated against the real
+`src/data/apps.ts` app list — the model can never invent an app slug.
+
+### Human-review requirement
+
+Every run's `humanReview` object is fixed by the Agent, never by the
+model: `required: true`, `approved: false`, `approvedBy: null`,
+`approvedAt: null`. Every assembled `SignalCandidate`/`TopicCandidate` also
+carries its own human-review markers per the front-half contracts above.
+`TopicCandidate.status` is only ever `"candidate"` or `"needs_review"` —
+never automatically `"rejected"` or `"archived"`.
+
+### Common errors
+
+| Error | Cause |
+| --- | --- |
+| `growth:signals requires --start and --end ...` | Missing `--start`/`--end` (required even with `--summary`). |
+| `No normalized growth summary found for ... — run growth:normalize for this range first.` | No matching `growth-summary-*.json` in `growth/data/processed/`. |
+| `No usable source records were found ...` | The Growth Summary, feedback, and manual input together produced zero source records for a non-dry-run — add `--manual-input`, supply `--feedback`, or use `--dry-run`. |
+| `Manual input record at index N is invalid: ...` / `... contains a credential-shaped key ...` | `--manual-input` file failed validation — see "Manual JSON input format" above. |
+| `The selected Growth Loop Feedback (...) was mock-generated ... pass --allow-mock-input to override` | Live Anthropic mode with mock-generated feedback and no override. |
+| `No LLM provider configured. Pass --provider mock ...` | Neither `--provider` nor `SIGNAL_MINING_LLM_PROVIDER`/`GROWTH_REPORT_LLM_PROVIDER` is set, and this isn't a dry run. |
+| `Model response referenced unknown sourceRecordRef(s)/signalProposalRef(s)/app slug(s): ...` | The model cited something outside the supplied catalogs — rejected, not patched. |
+| `Model response did not match the required schema: ...` | Zod validation failed (bad enum, unknown key, too-short array, etc.). |
+

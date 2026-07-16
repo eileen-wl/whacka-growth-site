@@ -31,4 +31,8 @@ growth/reports/*.md
 growth/decisions/*.json
 growth/decisions/*.md
 
+# generated signal mining runs (keep the folder via .gitkeep)
+growth/signals/*.json
+growth/signals/*.md
+
 /secrets/

@@ -1,0 +1,28 @@
+{
+  "records": [
+    {
+      "id": "mentor_note_2026_07_15_01",
+      "sourceType": "mentor_input",
+      "sourceName": "Weekly mentor meeting",
+      "title": "SMBs repeatedly ask for WhatsApp order handling",
+      "text": "Three separate mentor-program founders this week described wanting a way to log orders that come in over WhatsApp without re-typing them into a spreadsheet. All three run small home-based product businesses.",
+      "url": null,
+      "publishedAt": null,
+      "capturedAt": "2026-07-15T18:00:00.000Z",
+      "tags": ["whatsapp", "orders", "smb"],
+      "metrics": [],
+      "metadata": { "attendees": 3 }
+    },
+    {
+      "sourceType": "user_feedback",
+      "sourceName": "In-app feedback widget",
+      "title": "Request for a low-stock email alert",
+      "text": "A user of Orderly asked whether the app could email them when a product's stock count drops below the threshold, instead of only showing an in-app badge.",
+      "url": null,
+      "publishedAt": "2026-07-14T09:12:00.000Z",
+      "capturedAt": "2026-07-15T18:05:00.000Z",
+      "tags": ["orderly", "notifications", "low-stock"],
+      "metrics": [{ "name": "similarRequestsThisMonth", "value": 4, "unit": "count", "measurementBasis": "Manually tallied from the feedback widget inbox.", "period": "2026-07-01_to_2026-07-15" }]
+    }
+  ]
+}
