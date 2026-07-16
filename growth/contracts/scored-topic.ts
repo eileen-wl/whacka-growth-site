@@ -48,6 +48,8 @@ export const scoringDimensionSchema = z
     signalRefs: refIdArraySchema,
     evidenceRefs: refIdArraySchema,
     limitations: z.array(z.string().min(1).max(500)).max(20),
+    /** Optional, additive (see growth/contracts/README.md's versioning policy): distinguishes an evidence-grounded score from one that used a scoring agent's insufficient-evidence policy fallback. Omitted by producers that don't track this distinction. */
+    scoreBasis: z.enum(["evidence", "policy_default"]).optional(),
   })
   .refine((dimension) => Math.abs(dimension.weightedScore - dimension.score * dimension.weight) <= SCORE_TOLERANCE, {
     message: "weightedScore must equal score * weight (within tolerance).",

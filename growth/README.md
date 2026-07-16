@@ -1064,3 +1064,188 @@ never automatically `"rejected"` or `"archived"`.
 | `Model response referenced unknown sourceRecordRef(s)/signalProposalRef(s)/app slug(s): ...` | The model cited something outside the supplied catalogs — rejected, not patched. |
 | `Model response did not match the required schema: ...` | Zod validation failed (bad enum, unknown key, too-short array, etc.). |
 
+## Topic Scoring Agent
+
+### Role in the fixed Growth Loop, and how it differs from Signal Mining
+
+Step 2 — reads step 1's output and prepares input for Asset Generation
+(step 3, not yet built):
+
+```
+1. Signal Mining Agent · **2. Topic Scoring Agent** · 3. Asset Generation Agent ·
+4. CMS Writer · 5. Growth Site Engine · 6. Tracking Layer ·
+7. Growth Report Agent · 8. Experiment Decision Agent ·
+9. results return to the next Signal / Topic Pool cycle
+```
+
+Signal Mining *mines and normalizes* — it never scores a topic. Topic
+Scoring *assesses and ranks* — it never collects a new signal, never does
+web research, and never calls Reddit/X/Google Trends/Product Hunt/any
+search-volume tool. It reads exactly one validated
+`FinalSignalMiningRun` (`growth/signals/signal-mining-*.json` — never the
+`.md` file, never raw platform files, never a growth summary/report/
+decision) and produces a `ScoredTopic[]` for every `candidate`/
+`needs_review` topic in that run's `topicPool`. An `advance`
+recommendation is still not approval — nothing in this Agent starts Asset
+Generation, and `humanReviewRequired` is always `true`.
+
+### Input and output paths
+
+```
+growth/signals/signal-mining-{start}_to_{end}*.json                     (input, discovered or --input)
+growth/data/processed/topic-scoring-request-{start}_to_{end}.json       (--dry-run preview)
+growth/scores/topic-scoring-{start}_to_{end}.json                       (Mock/live run)
+growth/scores/topic-scoring-{start}_to_{end}.md                         (Mock/live run)
+```
+
+Same collision convention, atomic writes, and git-ignored generated output
+(`growth/scores/*.json`, `growth/scores/*.md`, only `.gitkeep` committed)
+as every other script in this directory.
+
+### Fixed scoring profile
+
+`small_business_topic_scoring@1.0.0` — one fixed, versioned constant
+(`growth/scoring/topic-scoring-profile.ts`), not a runtime-configurable
+rubric. Seven dimensions, weights summing to exactly `1.0`:
+
+| Dimension | Weight | Direction |
+| --- | --- | --- |
+| `demand` | 0.20 | Real, repeated need/engagement in the supplied signals — not total market demand, never invented search volume. |
+| `audience_relevance` | 0.15 | Match to the audiences actually present in the supplied signals/TopicCandidate. |
+| `product_fit` | 0.20 | Fit as a Whacka-style mini-app/growth-site use case, from supplied context only. |
+| `competition` | 0.10 | **Opportunity favourability** — higher means *less* observed overlap/saturation, not a whole-market claim. |
+| `feasibility` | 0.15 | How narrowly the topic can become a testable mini-app concept with the current system. |
+| `novelty` | 0.10 | How distinct the topic is from the campaign's existing apps/topic pool. |
+| `evidence_strength` | 0.10 | How strong, direct, diverse, and traceable the supporting signals are. |
+
+Full meanings, the fallback-score policy, deterministic math, ranking
+tie-breaks, and recommendation thresholds are documented in
+**`growth/scoring/README.md`** — the authoritative reference; this section
+only summarizes.
+
+### Insufficient-evidence fallback policy
+
+A dimension lacking real evidence uses `scoreBasis: "policy_default"` and
+the fixed score **50** — "insufficient evidence to move the score
+positively or negatively," never a measured average. Schema-enforced: a
+`policy_default` dimension must use exactly this score and must carry at
+least one limitation; an `evidence` dimension must cite at least one real
+`signalRef`/`sourceRecordRef`. The Markdown always labels which is which.
+
+### Deterministic calculations, ranking, and recommendation
+
+The model only ever supplies raw per-dimension scores (0-100) plus
+`scoreBasis`/rationale/citations — never a weight, weighted score, total,
+rank, or recommendation (the schema has no field for any of them). This
+Agent computes, deterministically, every time:
+
+- `weightedScore = score × weight`, `totalScore = sum(weightedScore)` —
+  reusing `growth/contracts/scored-topic.ts`'s own
+  `computeWeightedScore`/`computeTotalScore`, never a second
+  reimplementation.
+- **Ranking:** totalScore desc → `evidence_strength` score desc → `demand`
+  score desc → topicId asc (stable final tie-breaker).
+- **Recommendation** (`growth/scoring/topic-scoring-engine.ts`'s
+  `computeRecommendation`): `hold` if totalScore < 50 or any blocker
+  exists (blockers always win); `advance` only if totalScore ≥ 70,
+  `evidence_strength` ≥ 60, zero blockers, confidence high/medium, the
+  source Signal Mining run was **not** mock, and its topics **were**
+  human-approved; everything else that isn't `hold` is
+  `needs_human_review`. `reject` is never assigned automatically in v1 —
+  see `growth/scoring/README.md` for why.
+
+### Confidence caps
+
+The provider's own topic-level confidence is capped to the **minimum** of
+itself and every applicable rule: source run mock-generated → `low`;
+source topics not human-approved → `medium`; more than 3 of 7 dimensions
+used `policy_default` → `low`; the topic has 0-1 supporting signals →
+`low`. Only caps that actually reduce confidence produce a recorded reason
+(`confidenceAdjustments` in the final JSON, and shown per-topic in the
+Markdown) — nothing is silently downgraded.
+
+### Mock-input and unreviewed-input behavior
+
+`FinalSignalMiningRun.generation.isMock` and `.humanReview.approved` are
+both preserved into `FinalTopicScoringRun.provenance`
+(`sourceSignalMiningIsMock`/`sourceSignalsHumanReviewed`) and drive the
+confidence caps and recommendation rule above. `--dry-run` and
+`--provider mock` may freely consume mock or unreviewed input; a **live
+Anthropic run refuses a mock-generated Signal Mining run by default** —
+pass `--allow-mock-input` to override for explicit testing. Because the
+confidence cap alone already excludes `advance` for a mock source, and the
+human-approval check independently excludes it for an unreviewed source,
+scoring a current (mock, unreviewed) Signal Mining run normally yields
+`needs_human_review` for every topic, never `advance` — the Mock Provider
+test suite asserts exactly this.
+
+### Running it
+
+```bash
+# Dry run: loads and validates the Signal Mining run, builds per-topic
+# contexts and the fixed rubric, writes a request preview — no provider call.
+npm run growth:score-topics -- --start 2026-07-08 --end 2026-07-14 --dry-run
+
+# Full local pipeline with the Mock Provider — no key, no network call.
+npm run growth:score-topics -- --start 2026-07-08 --end 2026-07-14 --provider mock
+
+# Future live run, once ANTHROPIC_API_KEY and a resolved model are set:
+npm run growth:score-topics -- --start 2026-07-08 --end 2026-07-14
+
+# Other flags: --input <path>, --language en|zh-CN (default en), --overwrite,
+# --allow-mock-input
+```
+
+### Required live environment variables
+
+| Variable | Resolution |
+| --- | --- |
+| Provider | `--provider` → `TOPIC_SCORING_LLM_PROVIDER` → `GROWTH_REPORT_LLM_PROVIDER` → configuration error (live runs only) |
+| Model | `TOPIC_SCORING_MODEL` → `GROWTH_REPORT_MODEL` → configuration error (live Anthropic runs only) |
+| `TOPIC_SCORING_MAX_TOKENS` | Optional, defaults to `8000`. |
+| `ANTHROPIC_API_KEY` | Any live Anthropic call. Never required for `--dry-run` or `--provider mock`. |
+
+`TOPIC_SCORING_PROFILE` in `.env.example` is informational only — the
+scoring profile is a fixed code constant (`growth/scoring/topic-scoring-profile.ts`),
+not something the script reads or lets you swap at runtime.
+
+### Human-review boundary and why "advance" is not automatic approval
+
+Every run's `humanReview` object is fixed by the Agent, never by the
+model: `required: true`, `approved: false`, `selectedTopicIds: []`,
+`approvedBy: null`, `approvedAt: null`. `advance` means "this topic cleared
+every deterministic threshold" — it is not a publish action, does not
+write anywhere, and does not start Asset Generation. A human still
+reviews the ranked list and explicitly selects which topic(s) proceed;
+nothing in this codebase yet flips `approved` to `true` or acts on a
+selection.
+
+### Why no external market data is claimed
+
+`competition`, `demand`, and `feasibility` are the dimensions most likely
+to tempt an LLM into fabricating an external fact. The system prompt
+forbids inventing search volume, market size, competitors, user feedback,
+traffic, product conversions, or an unsupported Whacka capability;
+`competition` is explicitly framed as opportunity favourability *within
+the supplied evidence and this campaign's own content catalog* — never a
+claim about the whole external market. Whacka product-side conversions
+stay `null`/not-connected throughout, exactly as the Growth Report and
+Experiment Decision Agents already treat them.
+
+### Common errors
+
+| Error | Cause |
+| --- | --- |
+| `growth:score-topics requires --start and --end ...` | Missing `--start`/`--end` (required even with `--input`). |
+| `No Signal Mining run found for ... — run growth:signals for this range first.` | No matching `signal-mining-*.json` in `growth/signals/`. |
+| `"..." contains duplicate SignalCandidate id "..."` / `duplicate TopicCandidate id "..."` | The source Signal Mining run is internally inconsistent — rejected before scoring is attempted. |
+| `"..." TopicCandidate "..." references unknown SignalCandidate "..."` | A topic's `signalRefs` doesn't resolve within its own run — rejected. |
+| `"..." TopicCandidate "..." has status "..."; only "candidate" or "needs_review" ...` | The run contains a `rejected`/`archived` topic — Topic Scoring refuses to score it. |
+| `... has dataQuality.overallStatus = "invalid" ...` | The source run's own data quality was invalid; `"partial"` is fine, `"invalid"` is refused. |
+| `Signal Mining run's period (...) does not match the requested period (...)` | The selected/`--input` file covers a different date range than `--start`/`--end`. |
+| `The selected Signal Mining run ("...") was mock-generated ... pass --allow-mock-input to override` | Live Anthropic mode with a mock-generated source run and no override. |
+| `No LLM provider configured. Pass --provider mock ...` | No provider resolved from `--provider`, `TOPIC_SCORING_LLM_PROVIDER`, or `GROWTH_REPORT_LLM_PROVIDER`, and this isn't a dry run. |
+| `Model response contains an assessment for unknown topic "..."` / `is missing an assessment for topic(s): ...` | The model's topic coverage didn't exactly match the supplied topics — rejected, not patched. |
+| `Topic "..." dimension "..." references ... outside its own supplied signals/source records.` | The model cited a signal/source record that doesn't belong to that topic's own scoped context. |
+| `Model response did not match the required schema: ...` | Zod validation failed (bad enum, missing/duplicate dimension, out-of-range score, unknown key, etc.). |
+

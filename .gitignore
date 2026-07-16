@@ -35,4 +35,8 @@ growth/decisions/*.md
 growth/signals/*.json
 growth/signals/*.md
 
+# generated topic scoring runs (keep the folder via .gitkeep)
+growth/scores/*.json
+growth/scores/*.md
+
 /secrets/
