@@ -1249,3 +1249,190 @@ Experiment Decision Agents already treat them.
 | `Topic "..." dimension "..." references ... outside its own supplied signals/source records.` | The model cited a signal/source record that doesn't belong to that topic's own scoped context. |
 | `Model response did not match the required schema: ...` | Zod validation failed (bad enum, missing/duplicate dimension, out-of-range score, unknown key, etc.). |
 
+## Asset Generation Agent
+
+### Role in the fixed Growth Loop, and how it differs from Topic Scoring
+
+Step 3 — reads step 2's output and prepares input for CMS Writer (step 4,
+not yet built):
+
+```
+1. Signal Mining Agent · 2. Topic Scoring Agent · **3. Asset Generation Agent** ·
+4. CMS Writer · 5. Growth Site Engine · 6. Tracking Layer ·
+7. Growth Report Agent · 8. Experiment Decision Agent ·
+9. results return to the next Signal / Topic Pool cycle
+```
+
+Topic Scoring *assesses and ranks* — it never writes app copy. Asset
+Generation *designs content* — it never scores, ranks, or picks a topic;
+it turns **one explicitly selected** already-scored topic into one
+complete `AssetBundle` (app copy, creative brief, SEO copy, CTA labels,
+optional social copy). It reads exactly one validated
+`FinalTopicScoringRun` (`growth/scores/topic-scoring-*.json` — never the
+`.md` file, never Signal Mining/Growth Summary/Growth Report/Experiment
+Decision files, never an external website) and never writes to Sanity,
+never creates a `CMSWriteRequest`, never touches the Astro site, and never
+deploys anything.
+
+### Explicit `--topic-id` requirement — no automatic rank-1 selection
+
+`--topic-id <topic_id>` is **always required**. There is no fallback to
+`ranking.topTopicId`, no "use rank 1," and no implicit selection of any
+kind — the selected topic ID must exist in the run's `topicCatalog`, and a
+matching `ScoredTopic` must exist in `scoredTopics`, or the run fails
+before any provider call. The selected topic ID is recorded explicitly in
+`FinalAssetGenerationRun.provenance.selectedTopicId`.
+
+### Approval and override behavior
+
+The current Topic Scoring output typically has `humanReview.approved =
+false` and `humanReview.selectedTopicIds = []` — an `advance`
+recommendation or a #1 rank is **never** treated as human approval.
+
+| Condition | dry-run / Mock | Live Anthropic |
+| --- | --- | --- |
+| Mock-generated Topic Scoring input | Allowed | Refused unless `--allow-mock-input` |
+| Topics not human-approved (`humanReview.approved = false`) | Allowed | Refused unless `--allow-unapproved-topic` |
+| Selected topic's recommendation is `hold` | Refused unless `--allow-hold-topic` | **Always refused in v1**, regardless of any flag |
+
+Every override actually used is recorded in
+`provenance.allowMockInputUsed` / `allowUnapprovedTopicUsed` /
+`allowHoldTopicUsed` and shown prominently in the Markdown. An override is
+explicitly a development/engineering-validation escape hatch — it is never
+equivalent to approval, and `AssetBundle.validation.humanReviewRequired`
+stays `true` regardless.
+
+### Provider-neutral architecture (same pattern as every other Agent)
+
+```
+growth/agents/asset-generation-agent.ts          — orchestration; imports only
+                                                    growth/llm/asset-generation-provider.ts's
+                                                    interface, never an SDK directly
+growth/llm/asset-generation-provider.ts          — the AssetGenerationProvider interface
+growth/llm/mock-asset-generation-provider.ts     — no API key, no network call
+growth/llm/anthropic-asset-generation-provider.ts — the only file here that imports @anthropic-ai/sdk
+growth/prompts/asset-generation-prompt.ts        — system/user prompt construction
+growth/renderers/asset-generation-markdown.ts    — pure JSON -> Markdown renderer
+```
+
+The provider never produces IDs, URLs, UTM values, status fields, provider
+metadata, topic scores, or CMS/publication fields — the response schema
+(`AssetGenerationAnalysis`) has no field for any of them. All of that is
+computed deterministically afterward by the Agent.
+
+### Running it
+
+```bash
+# Dry run: loads and validates the Topic Scoring run, resolves the
+# explicitly selected topic, builds the generation context, writes a
+# request preview — no provider call.
+npm run growth:generate-assets -- \
+  --start 2026-07-08 --end 2026-07-14 --topic-id topic_0219d6e950cc913e --dry-run
+
+# Full local pipeline with the Mock Provider — no key, no network call.
+npm run growth:generate-assets -- \
+  --start 2026-07-08 --end 2026-07-14 --topic-id topic_0219d6e950cc913e --provider mock
+
+# Future live run, once ANTHROPIC_API_KEY and a resolved model are set,
+# and the topic has actually been human-approved:
+npm run growth:generate-assets -- \
+  --start 2026-07-08 --end 2026-07-14 --topic-id <approved-topic-id>
+
+# Other flags: --input <path>, --language en|zh-CN (default en),
+# --social-channels linkedin,x (default: none), --overwrite,
+# --allow-mock-input, --allow-unapproved-topic, --allow-hold-topic
+```
+
+### Optional social channel behavior
+
+No social channels are requested by default — `social.posts` is `[]`.
+`--social-channels linkedin,x` normalizes (trim, lowercase, dedupe) and
+passes through an explicit allow-list; the model may only produce posts
+for those exact channels, and any post for an unrequested channel is
+rejected outright (not silently dropped). Social copy never implies the
+post was actually published anywhere.
+
+### AssetBundle compatibility and the current SEO persistence gap
+
+`AssetBundle.app.*` maps field-for-field onto the real Sanity `appTool`
+schema and `AppData` type (see the Front-Half Contracts section above) —
+this Agent reuses that existing contract unchanged. One known gap,
+carried over from the contracts work and re-surfaced by every generated
+bundle: **the current Sanity `appTool` schema has no SEO-specific
+fields**, so `AssetBundle.seo.*` (title/metaDescription/primaryKeyword/
+secondaryKeywords) has nowhere to persist yet — only `seo.faq` (which maps
+to the real `app.faq` field) does. Every generated bundle carries the
+factual warning *"SEO fields are present in AssetBundle but the current
+Sanity appTool schema does not yet persist them"* in
+`validation.warnings` and `compatibility.warnings` — the fields are never
+silently discarded, and CMS Writer (not this Agent) is what will
+eventually need to resolve that mapping gap.
+
+### CTA URL and UTM rules
+
+- `demoUrl`/`remixUrl` are **always `null`** — no real per-app demo or
+  remix target exists yet for a not-yet-built concept, and this Agent
+  never invents one.
+- `buildUrl` reuses the one real, already-existing, platform-wide "start
+  building" destination (`src/lib/utm.ts`'s `HOMEPAGE_DASHBOARD_URL`,
+  `https://whacka.app/dashboard`) — not per-app, not invented, safe to
+  offer for any generated concept.
+- `app.ctaHref` is the real `buildUrl` when the primary CTA type is
+  `"build"`, or `"#"` — the same no-real-target placeholder convention
+  already used by every current app fixture — otherwise. Never a
+  placeholder string like `"TBD"`, never a fabricated URL.
+- `cta.utmContent` is set deterministically to the final resolved slug,
+  matching `src/lib/utm.ts`'s own `getUtmContent()` fallback. `utm_source`/
+  `utm_campaign`/`utm_medium` stay code constants exactly as they already
+  are — this Agent never invents a UTM value.
+
+### Deterministic slug and AssetBundle ID behavior
+
+The provider may suggest a name/slug; the **final** slug is always
+resolved deterministically: lowercased, URL-safe, no spaces, no leading/
+trailing hyphen. A conflict with an existing app slug (checked against the
+real `src/data/apps.ts` catalog) never silently overwrites that app —
+instead a deterministic suffix derived from the topic ID is appended, and
+a factual warning records the original suggestion. The final
+`AssetBundle.id` is deterministic from campaign ID + topic ID + final slug
++ language + prompt version (a stricter basis than
+`growth/contracts/asset-bundle.ts`'s own `buildAssetBundleId`, which this
+Agent deliberately does not modify or reuse — see the code comment in
+`growth/agents/asset-generation-agent.ts` for why language must be part of
+the hash).
+
+### Human-review boundary
+
+Every run's `humanReview` object is fixed by the Agent, never by the
+model: `required: true`, `approved: false`, `approvedBy: null`,
+`approvedAt: null`. `AssetBundle.validation.status` is computed
+deterministically too (never provider-supplied) — in v1 it is always
+`"needs_review"`, because the SEO persistence gap above is always present;
+`"draft"` (the contract's only other allowed value) only becomes reachable
+once that gap and every other review trigger (mock source, unapproved
+topic, override flags used, a non-`"advance"` recommendation, generated
+assumptions/limitations, an unavailable primary CTA URL, Mock Provider
+generation) no longer apply. **Confirmed: this Agent never calls
+`@sanity/client`, never writes a document, and never modifies an Astro
+page** — `compatibility.cmsWritePerformed` and `.siteModified` are always
+`false`, checked by tests.
+
+### Common errors
+
+| Error | Cause |
+| --- | --- |
+| `growth:generate-assets requires --topic-id ...` | `--topic-id` was omitted — there is no automatic selection. |
+| `growth:generate-assets requires --start and --end ...` | Missing `--start`/`--end` (required even with `--input`). |
+| `No Topic Scoring run found for ... — run growth:score-topics for this range first.` | No matching `topic-scoring-*.json` in `growth/scores/`. |
+| `Selected topic ID "..." was not found in this Topic Scoring run's topicCatalog.` | The given `--topic-id` doesn't exist in the loaded run (including a zero-topic run). |
+| `No ScoredTopic found for topic ID "..." ...` | The topic exists but has no corresponding score — should not happen for a valid Topic Scoring run. |
+| `... has dataQuality.overallStatus = "invalid" ...` | The source run's own data quality was invalid; `"partial"` is fine, `"invalid"` is refused. |
+| `Topic Scoring run's period (...) does not match the requested period (...)` | The selected/`--input` file covers a different date range than `--start`/`--end`. |
+| `The selected Topic Scoring run ("...") was mock-generated ... pass --allow-mock-input to override` | Live Anthropic mode with a mock-generated source run and no override. |
+| `... topics have not been human-approved ... pass --allow-unapproved-topic to override` | Live Anthropic mode with an unapproved run and no override. |
+| `Selected topic's recommendation is "hold". Pass --allow-hold-topic ...` | Dry-run/Mock mode with a `hold` topic and no override. |
+| `Selected topic's recommendation is "hold". Live Anthropic generation for a 'hold' topic is not supported in v1 ...` | Live Anthropic mode with a `hold` topic — never overridable. |
+| `Model generated a social post for channel "...", which was not requested.` | The model produced a post outside the explicit `--social-channels` allow-list — rejected, not patched. |
+| `Could not resolve a valid slug from the suggested name "..."` | The provider's slug suggestion normalized to an empty string. |
+| `Model response did not match the required schema: ...` | Zod validation failed (bad enum, empty required field, unknown key, invented URL/ID/status field, etc.). |
+

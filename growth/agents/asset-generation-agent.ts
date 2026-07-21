@@ -1,0 +1,600 @@
+import { deterministicId } from "../lib/ids";
+import { buildAssetGenerationLLMRequest } from "../prompts/asset-generation-prompt";
+import { assetGenerationAnalysisSchema } from "../types/asset-generation";
+import { validateAssetBundle } from "../contracts/asset-bundle";
+import { buildExistingContentCatalog } from "../signal-sources/existing-content-catalog";
+import { HOMEPAGE_DASHBOARD_URL } from "../../src/lib/utm";
+import type { AssetGenerationProvider } from "../llm/asset-generation-provider";
+import type { AssetApp, AssetBundle, AssetCreativeBrief, AssetCta, AssetGenerationMeta, AssetSeo, AssetSocial, AssetValidation } from "../contracts/asset-bundle";
+import type { ScoredTopic } from "../contracts/scored-topic";
+import type { TopicCandidate } from "../contracts/topic-candidate";
+import type { SupportedLanguage } from "../types/llm";
+import type {
+  AssetGenerationAnalysis,
+  AssetGenerationContext,
+  AssetGenerationExistingAppCatalogEntry,
+  CtaInput,
+  FinalAssetGenerationRun,
+} from "../types/asset-generation";
+import type { FinalTopicScoringRun } from "../types/topic-scoring";
+
+export class AssetGenerationInputError extends Error {}
+export class AssetGenerationValidationError extends Error {}
+export class AssetGenerationSlugError extends Error {}
+
+/** The full set of CTA types the current AssetBundle contract and Astro site support — always the complete list, never filtered by observed evidence (unlike Topic Scoring's decisionScope). */
+export const ASSET_GENERATION_ALLOWED_CTA_TYPES = ["view_demo", "remix", "build", "copy_prompt"] as const;
+
+export const SEO_PERSISTENCE_WARNING =
+  "SEO fields are present in AssetBundle but the current Sanity appTool schema does not yet persist them. CMS Writer must resolve this mapping gap.";
+
+/** Informational only — never parsed back out of the model's response, just gives it a concrete sense of what "complete" content looks like. */
+export const CMS_FIELD_REQUIREMENTS: string[] = [
+  "app.name, app.tagline, app.shortDescription, app.category are required non-empty strings.",
+  "app.problem and app.solution are required non-empty paragraphs (max 2000 characters each).",
+  "app.appPrompt is a required non-empty 'Whacka Prompt' a user would submit to build this app (max 4000 characters).",
+  "app.faq entries each need both a non-empty question and a non-empty answer.",
+  "app.whoItsFor is an optional list of short audience descriptions.",
+];
+
+function truncate(value: string, maxLength: number): string {
+  return value.length <= maxLength ? value : `${value.slice(0, maxLength - 1)}…`;
+}
+
+// ---------------------------------------------------------------------------
+// Existing app catalog (reused from Signal Mining's own reader of the real
+// src/data/apps.ts — never a second, independent read of that file).
+// ---------------------------------------------------------------------------
+
+export function buildExistingAppCatalog(): AssetGenerationExistingAppCatalogEntry[] {
+  return buildExistingContentCatalog().map((entry) => ({
+    name: entry.appName,
+    slug: entry.appSlug,
+    hook: entry.hook,
+    status: entry.status,
+  }));
+}
+
+// ---------------------------------------------------------------------------
+// Selected-topic resolution
+// ---------------------------------------------------------------------------
+
+export function resolveSelectedTopic(run: FinalTopicScoringRun, topicId: string): { topic: TopicCandidate; scoredTopic: ScoredTopic } {
+  const topic = run.topicCatalog.find((candidate) => candidate.id === topicId);
+  if (!topic) {
+    throw new AssetGenerationInputError(`Selected topic ID "${topicId}" was not found in this Topic Scoring run's topicCatalog.`);
+  }
+  const scoredTopic = run.scoredTopics.find((candidate) => candidate.topicId === topicId);
+  if (!scoredTopic) {
+    throw new AssetGenerationInputError(`No ScoredTopic found for topic ID "${topicId}" in this Topic Scoring run.`);
+  }
+  return { topic, scoredTopic };
+}
+
+// ---------------------------------------------------------------------------
+// Deterministic generation context
+// ---------------------------------------------------------------------------
+
+export interface BuildAssetGenerationContextParams {
+  run: FinalTopicScoringRun;
+  topic: TopicCandidate;
+  scoredTopic: ScoredTopic;
+  language: SupportedLanguage;
+  requestedSocialChannels: string[];
+  existingAppCatalog: AssetGenerationExistingAppCatalogEntry[];
+}
+
+/** Builds one deterministic AssetGenerationContext for the explicitly selected topic — never another topic's content, never raw analytics. */
+export function buildAssetGenerationContext(params: BuildAssetGenerationContextParams): AssetGenerationContext {
+  const { run, topic, scoredTopic } = params;
+
+  return {
+    period: run.period,
+    campaign: run.campaign,
+    topicId: topic.id,
+    scoredTopicId: scoredTopic.id,
+    canonicalName: topic.canonicalName,
+    slug: topic.slug,
+    problemStatement: topic.problemStatement,
+    targetAudience: topic.targetAudience,
+    useCases: topic.useCases,
+    desiredOutcome: topic.desiredOutcome,
+    rank: scoredTopic.ranking?.rank ?? null,
+    candidateCount: scoredTopic.ranking?.candidateCount ?? null,
+    totalScore: scoredTopic.totalScore,
+    recommendation: scoredTopic.recommendation,
+    confidence: scoredTopic.confidence,
+    dimensions: scoredTopic.dimensions.map((dimension) => ({
+      key: dimension.key,
+      label: dimension.label,
+      score: dimension.score,
+      weight: dimension.weight,
+      weightedScore: dimension.weightedScore,
+      rationale: dimension.rationale,
+      scoreBasis: dimension.scoreBasis ?? null,
+      signalRefs: dimension.signalRefs,
+      evidenceRefs: dimension.evidenceRefs,
+      limitations: dimension.limitations,
+    })),
+    blockers: scoredTopic.blockers,
+    relationshipToExistingContent: {
+      status: topic.relationshipToExistingContent.status,
+      relatedAppSlugs: topic.relationshipToExistingContent.relatedAppSlugs,
+      relatedTopicIds: topic.relationshipToExistingContent.relatedTopicIds,
+    },
+    sourceScoringIsMock: run.generation.isMock,
+    sourceTopicsHumanReviewed: run.humanReview.approved,
+    dataQualityWarnings: run.dataQuality.warnings,
+    dataQualityLimitations: run.dataQuality.limitations,
+    language: params.language,
+    allowedCtaTypes: [...ASSET_GENERATION_ALLOWED_CTA_TYPES],
+    requestedSocialChannels: params.requestedSocialChannels,
+    existingAppCatalog: params.existingAppCatalog,
+    seoPersistenceLimitation: SEO_PERSISTENCE_WARNING,
+    cmsFieldRequirements: CMS_FIELD_REQUIREMENTS,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Structured-output validation
+// ---------------------------------------------------------------------------
+
+/**
+ * Validates a provider's raw response before it's trusted downstream: (1)
+ * the static Zod schema (re-checked for every provider, since the Mock
+ * Provider skips the Anthropic SDK's own client-side parsing); (2) every
+ * generated social post's channel must be one of the explicitly requested
+ * channels — a request for zero channels means zero posts are valid, since
+ * an empty allowed-set rejects any post outright.
+ */
+export function validateAssetGenerationAnalysis(rawData: unknown, requestedSocialChannels: string[]): AssetGenerationAnalysis {
+  const parsed = assetGenerationAnalysisSchema.safeParse(rawData);
+  if (!parsed.success) {
+    const issues = parsed.error.issues.slice(0, 5).map((issue) => `${issue.path.join(".") || "(root)"}: ${issue.message}`);
+    throw new AssetGenerationValidationError(`Model response did not match the required schema: ${issues.join("; ")}`);
+  }
+  const analysis = parsed.data;
+
+  const allowedChannels = new Set(requestedSocialChannels);
+  for (const post of analysis.socialPosts) {
+    if (!allowedChannels.has(post.channel)) {
+      throw new AssetGenerationValidationError(
+        `Model generated a social post for channel "${post.channel}", which was not requested. Requested channels: ${
+          requestedSocialChannels.join(", ") || "(none)"
+        }.`
+      );
+    }
+  }
+
+  return analysis;
+}
+
+// ---------------------------------------------------------------------------
+// Slug resolution
+// ---------------------------------------------------------------------------
+
+function toKebabSlug(value: string): string {
+  return value
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+export interface SlugResolution {
+  slug: string;
+  conflicted: boolean;
+  originalSuggestion: string;
+}
+
+/**
+ * Normalizes the provider's slug suggestion to the current frontend routing
+ * convention (lowercase, URL-safe, no spaces, no leading/trailing hyphen)
+ * and resolves any conflict with an existing app slug deterministically —
+ * never by silently overwriting the existing app. Existing apps are never
+ * mutated by this function.
+ */
+export function resolveFinalSlug(suggestion: string, topicId: string, existingSlugs: Set<string>): SlugResolution {
+  const base = toKebabSlug(suggestion);
+  if (base.length === 0) {
+    throw new AssetGenerationSlugError(`Could not resolve a valid slug from the suggested name "${suggestion}".`);
+  }
+  if (!existingSlugs.has(base)) {
+    return { slug: base, conflicted: false, originalSuggestion: suggestion };
+  }
+
+  const suffix = deterministicId("slugsuffix", topicId).split("_")[1]?.slice(0, 6) ?? "alt";
+  const withSuffix = truncate(`${base}-${suffix}`, 200);
+  if (existingSlugs.has(withSuffix)) {
+    throw new AssetGenerationSlugError(`Could not resolve a unique slug for topic "${topicId}" — both "${base}" and "${withSuffix}" are already in use.`);
+  }
+  return { slug: withSuffix, conflicted: true, originalSuggestion: suggestion };
+}
+
+// ---------------------------------------------------------------------------
+// Deterministic AssetBundle ID
+// ---------------------------------------------------------------------------
+
+/**
+ * Deliberately NOT `growth/contracts/asset-bundle.ts`'s own `buildAssetBundleId`
+ * (which hashes only `scoredTopicId` + `promptVersion`, and is left
+ * untouched for full backward compatibility with the front-half contracts
+ * work). This Agent's actual requirement is stricter: the same
+ * ScoredTopic + promptVersion regenerated in a *different language* must
+ * not collide on the same id, so `campaignId`, `topicId`, `finalSlug`, and
+ * `language` are all part of the hash basis too.
+ */
+export function buildFinalAssetBundleId(args: { campaignId: string; topicId: string; finalSlug: string; language: string; promptVersion: string }): string {
+  return deterministicId("assetbundle", args.campaignId, args.topicId, args.finalSlug, args.language, args.promptVersion);
+}
+
+// ---------------------------------------------------------------------------
+// CTA / URL / UTM assembly
+// ---------------------------------------------------------------------------
+
+/**
+ * `demoUrl`/`remixUrl` are always null in v1 — no real per-app demo or
+ * remix target exists yet for a not-yet-built concept, and this Agent never
+ * invents one. `buildUrl` reuses the one real, already-existing,
+ * platform-wide "start building" destination
+ * (`src/lib/utm.ts`'s `HOMEPAGE_DASHBOARD_URL`) — not invented, not
+ * per-app-specific, safe to offer for any generated concept. `app.ctaHref`
+ * mirrors the existing project convention of `"#"` as the safe
+ * no-real-target placeholder (see growth/contracts/README.md) when the
+ * primary CTA type isn't `"build"`.
+ */
+export function resolveCtaAndUrls(cta: CtaInput, finalSlug: string): { ctaLabel: string; ctaHref: string; cta: AssetCta } {
+  const ctaHref = cta.primaryType === "build" ? HOMEPAGE_DASHBOARD_URL : "#";
+  const ctaLabel = (cta.primaryType === "build" ? cta.labels.build : null) ?? cta.labels.primary;
+
+  return {
+    ctaLabel,
+    ctaHref,
+    cta: {
+      primaryType: cta.primaryType,
+      demoUrl: null,
+      remixUrl: null,
+      buildUrl: HOMEPAGE_DASHBOARD_URL,
+      labels: { viewDemo: cta.labels.viewDemo, remix: cta.labels.remix, build: cta.labels.build, copyPrompt: cta.labels.copyPrompt },
+      utmContent: finalSlug,
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Deterministic validation status (agent-level concept: "valid"/"needs_review";
+// distinct from the contract's own `validation.status: "draft"|"needs_review"`
+// field, which "valid" maps onto "draft" for)
+// ---------------------------------------------------------------------------
+
+export interface ValidationStatusContext {
+  sourceIsMock: boolean;
+  topicHumanReviewed: boolean;
+  allowUnapprovedTopicUsed: boolean;
+  allowHoldTopicUsed: boolean;
+  recommendation: string;
+  hasAssumptionsOrLimitations: boolean;
+  primaryCtaUrlAvailable: boolean;
+  generationIsMock: boolean;
+}
+
+export function computeValidationStatus(ctx: ValidationStatusContext): { status: "valid" | "needs_review"; reasons: string[] } {
+  const reasons: string[] = [];
+
+  if (ctx.sourceIsMock) reasons.push("Source Topic Scoring run was mock-generated.");
+  if (!ctx.topicHumanReviewed) reasons.push("Source topics have not been human-approved.");
+  if (ctx.allowUnapprovedTopicUsed) reasons.push("--allow-unapproved-topic was used to override the human-approval requirement.");
+  if (ctx.allowHoldTopicUsed) reasons.push("--allow-hold-topic was used to override the default rejection of a 'hold' topic.");
+  if (ctx.recommendation === "needs_human_review" || ctx.recommendation === "hold") {
+    reasons.push(`Selected topic's recommendation is "${ctx.recommendation}".`);
+  }
+  if (ctx.hasAssumptionsOrLimitations) reasons.push("Generated content includes assumptions or limitations requiring review.");
+  // Always true in v1 — see SEO_PERSISTENCE_WARNING.
+  reasons.push("SEO fields are not yet persisted by the current Sanity appTool schema.");
+  if (!ctx.primaryCtaUrlAvailable) reasons.push("No real URL is available for the selected primary CTA type.");
+  if (ctx.generationIsMock) reasons.push("Content was generated by the Mock Provider.");
+
+  return { status: reasons.length > 0 ? "needs_review" : "valid", reasons };
+}
+
+// ---------------------------------------------------------------------------
+// AssetBundle assembly
+// ---------------------------------------------------------------------------
+
+function dedupe(values: string[]): string[] {
+  return [...new Set(values)];
+}
+
+function prefixedList(prefix: string, items: string[]): string[] {
+  return items.map((item) => truncate(`${prefix}: ${item}`, 500));
+}
+
+export interface AssembleAssetBundleProvenance {
+  sourceFileNames: string[];
+  sourceHashes: string[];
+  provider: string;
+  model: string | null;
+  isMock: boolean;
+}
+
+export interface AssembleAssetBundleParams {
+  analysis: AssetGenerationAnalysis;
+  context: AssetGenerationContext;
+  finalSlug: string;
+  slugConflicted: boolean;
+  slugOriginalSuggestion: string;
+  campaignId: string;
+  generatedAt: string;
+  promptVersion: string;
+  provenance: AssembleAssetBundleProvenance;
+  allowUnapprovedTopicUsed: boolean;
+  allowHoldTopicUsed: boolean;
+}
+
+/**
+ * Deterministically assembles the final AssetBundle contract from validated
+ * provider output. The provider never controls IDs, campaign/topic/
+ * scoredTopic identity, slug-conflict resolution, status, URLs, UTM values,
+ * human-review state, provenance, or the final validation status — all of
+ * that is computed here, never trusted from the model.
+ */
+export function assembleAssetBundle(params: AssembleAssetBundleParams): AssetBundle {
+  const { analysis, context } = params;
+  const { ctaLabel, ctaHref, cta } = resolveCtaAndUrls(analysis.cta, params.finalSlug);
+
+  const app: AssetApp = {
+    name: analysis.appConcept.name,
+    slug: params.finalSlug,
+    tagline: analysis.appConcept.tagline,
+    category: analysis.appConcept.category,
+    shortDescription: analysis.appConcept.shortDescription,
+    image: `/images/${params.finalSlug}/cover.svg`,
+    screenshots: [],
+    problem: analysis.appConcept.problem,
+    solution: analysis.appConcept.solution,
+    whoItsFor: analysis.appConcept.whoItsFor,
+    appPrompt: analysis.appConcept.appPrompt,
+    ctaLabel,
+    ctaHref,
+    relatedSlugs: context.relationshipToExistingContent.relatedAppSlugs,
+    faq: analysis.seo.faq,
+    status: "draft",
+  };
+
+  const creativeBrief: AssetCreativeBrief = {
+    hook: analysis.appConcept.creativeBrief.hook,
+    persona: analysis.appConcept.creativeBrief.persona,
+    scenario: analysis.appConcept.creativeBrief.scenario,
+    steps: analysis.appConcept.steps.map((step) => truncate(`${step.title} — ${step.description}`, 500)),
+  };
+
+  const seo: AssetSeo = {
+    title: analysis.seo.title,
+    metaDescription: analysis.seo.metaDescription,
+    primaryKeyword: analysis.seo.primaryKeyword,
+    secondaryKeywords: analysis.seo.secondaryKeywords,
+  };
+
+  const social: AssetSocial = { posts: analysis.socialPosts.map((post) => ({ channel: post.channel, text: post.copy })) };
+
+  const hasAssumptionsOrLimitations =
+    analysis.appConcept.creativeBrief.assumptions.length +
+      analysis.appConcept.creativeBrief.limitations.length +
+      analysis.generationNotes.assumptions.length +
+      analysis.generationNotes.limitations.length >
+    0;
+
+  const { status: agentStatus } = computeValidationStatus({
+    sourceIsMock: context.sourceScoringIsMock,
+    topicHumanReviewed: context.sourceTopicsHumanReviewed,
+    allowUnapprovedTopicUsed: params.allowUnapprovedTopicUsed,
+    allowHoldTopicUsed: params.allowHoldTopicUsed,
+    recommendation: context.recommendation,
+    hasAssumptionsOrLimitations,
+    primaryCtaUrlAvailable: cta.primaryType === "build",
+    generationIsMock: params.provenance.isMock,
+  });
+
+  const warnings = dedupe([
+    SEO_PERSISTENCE_WARNING,
+    ...(params.slugConflicted
+      ? [truncate(`Suggested slug "${params.slugOriginalSuggestion}" conflicts with an existing app; using "${params.finalSlug}" instead.`, 500)]
+      : []),
+    ...(context.sourceScoringIsMock ? ["Source Topic Scoring run was mock-generated (generation.isMock = true)."] : []),
+    ...(!context.sourceTopicsHumanReviewed ? ["Source topics have not been human-approved (humanReview.approved = false)."] : []),
+    ...(context.recommendation !== "advance"
+      ? [truncate(`Selected topic's recommendation is "${context.recommendation}", not "advance".`, 500)]
+      : []),
+    ...(params.provenance.isMock ? ["Generated by the Mock Provider — content is for engineering validation only, not real market copy."] : []),
+    ...prefixedList("Assumption", analysis.appConcept.creativeBrief.assumptions),
+    ...prefixedList("Limitation", analysis.appConcept.creativeBrief.limitations),
+    ...prefixedList("Assumption", analysis.generationNotes.assumptions),
+    ...prefixedList("Limitation", analysis.generationNotes.limitations),
+    truncate(`Topic alignment: ${analysis.generationNotes.topicAlignment}`, 500),
+    truncate(`Differentiation from existing apps: ${analysis.generationNotes.differentiationFromExistingApps}`, 500),
+  ]).slice(0, 50);
+
+  const validation: AssetValidation = {
+    status: agentStatus === "valid" ? "draft" : "needs_review",
+    warnings,
+    humanReviewRequired: true,
+  };
+
+  const generation: AssetGenerationMeta = {
+    provider: params.provenance.provider,
+    model: params.provenance.model,
+    isMock: params.provenance.isMock,
+    promptVersion: params.promptVersion,
+    evidenceRefs: dedupe(context.dimensions.flatMap((dimension) => dimension.evidenceRefs)),
+    signalRefs: dedupe(context.dimensions.flatMap((dimension) => dimension.signalRefs)),
+    findingRefs: [],
+  };
+
+  const bundle: AssetBundle = {
+    schemaVersion: "1.0.0",
+    id: buildFinalAssetBundleId({
+      campaignId: params.campaignId,
+      topicId: context.topicId,
+      finalSlug: params.finalSlug,
+      language: context.language,
+      promptVersion: params.promptVersion,
+    }),
+    scoredTopicId: context.scoredTopicId,
+    topicId: context.topicId,
+    campaignId: params.campaignId,
+    generatedAt: params.generatedAt,
+    app,
+    creativeBrief,
+    seo,
+    cta,
+    social,
+    generation,
+    validation,
+    provenance: {
+      generatedBy: "asset-generation-agent",
+      sourceFileNames: params.provenance.sourceFileNames,
+      sourceHashes: params.provenance.sourceHashes,
+      sourceRecordIds: [context.scoredTopicId],
+      sourceDecisionId: null,
+      provider: params.provenance.provider,
+      model: params.provenance.model,
+      isMock: params.provenance.isMock,
+      humanReviewed: false,
+    },
+  };
+
+  return validateAssetBundle(bundle);
+}
+
+// ---------------------------------------------------------------------------
+// Orchestration
+// ---------------------------------------------------------------------------
+
+export interface RunAssetGenerationAgentParams {
+  /** Already loaded and validated by the caller (script) — see growth/scripts/generate-assets.ts. */
+  run: FinalTopicScoringRun;
+  topicId: string;
+  sourceFilename: string;
+  sourceSha256: string;
+  language: SupportedLanguage;
+  maxTokens: number;
+  promptVersion: string;
+  provider: AssetGenerationProvider;
+  requestedSocialChannels: string[];
+  allowMockInputUsed: boolean;
+  allowUnapprovedTopicUsed: boolean;
+  allowHoldTopicUsed: boolean;
+  /** Injectable for deterministic tests; defaults to the current time. */
+  generatedAt?: string;
+}
+
+/**
+ * Runs the full Asset Generation Agent pipeline against an already-loaded,
+ * already-validated FinalTopicScoringRun and an explicitly selected topic
+ * ID: resolve the topic/scored-topic, build the deterministic context,
+ * build the LLM request, call the given provider, validate the response,
+ * resolve the slug, and assemble the final AssetBundle. Depends only on the
+ * provider-neutral AssetGenerationProvider interface — never imports an SDK
+ * directly. Never writes to Sanity, never creates a CMSWriteRequest, never
+ * touches the Astro site.
+ */
+export async function runAssetGenerationAgent(params: RunAssetGenerationAgentParams): Promise<FinalAssetGenerationRun> {
+  const generatedAt = params.generatedAt ?? new Date().toISOString();
+  const { topic, scoredTopic } = resolveSelectedTopic(params.run, params.topicId);
+  const existingAppCatalog = buildExistingAppCatalog();
+
+  const context = buildAssetGenerationContext({
+    run: params.run,
+    topic,
+    scoredTopic,
+    language: params.language,
+    requestedSocialChannels: params.requestedSocialChannels,
+    existingAppCatalog,
+  });
+
+  const request = buildAssetGenerationLLMRequest({
+    campaign: params.run.campaign,
+    period: params.run.period,
+    language: params.language,
+    context,
+    allowedCtaTypes: [...ASSET_GENERATION_ALLOWED_CTA_TYPES],
+    requestedSocialChannels: params.requestedSocialChannels,
+    maxTokens: params.maxTokens,
+  });
+
+  const result = await params.provider.generateStructuredAssets(request);
+  const analysis = validateAssetGenerationAnalysis(result.data, params.requestedSocialChannels);
+
+  const isMock = params.provider.name === "mock";
+  const existingSlugs = new Set(existingAppCatalog.map((entry) => entry.slug));
+  const slugResolution = resolveFinalSlug(analysis.appConcept.slugSuggestion, context.topicId, existingSlugs);
+
+  const assetBundle = assembleAssetBundle({
+    analysis,
+    context,
+    finalSlug: slugResolution.slug,
+    slugConflicted: slugResolution.conflicted,
+    slugOriginalSuggestion: slugResolution.originalSuggestion,
+    campaignId: params.run.campaign.id,
+    generatedAt,
+    promptVersion: params.promptVersion,
+    provenance: { sourceFileNames: [params.sourceFilename], sourceHashes: [params.sourceSha256], provider: result.provider, model: result.model, isMock },
+    allowUnapprovedTopicUsed: params.allowUnapprovedTopicUsed,
+    allowHoldTopicUsed: params.allowHoldTopicUsed,
+  });
+
+  return {
+    schemaVersion: "1.0.0",
+    runType: "asset_generation",
+    generatedAt,
+    period: params.run.period,
+    campaign: params.run.campaign,
+    provenance: {
+      sourceTopicScoringFilename: params.sourceFilename,
+      sourceTopicScoringSha256: params.sourceSha256,
+      sourceTopicScoringGeneratedAt: params.run.generatedAt,
+      sourceTopicScoringProvider: params.run.generation.provider,
+      sourceTopicScoringModel: params.run.generation.model,
+      sourceTopicScoringIsMock: params.run.generation.isMock,
+      sourceTopicsHumanReviewed: params.run.humanReview.approved,
+      selectedTopicId: topic.id,
+      selectedScoredTopicId: scoredTopic.id,
+      allowMockInputUsed: params.allowMockInputUsed,
+      allowUnapprovedTopicUsed: params.allowUnapprovedTopicUsed,
+      allowHoldTopicUsed: params.allowHoldTopicUsed,
+    },
+    generation: {
+      provider: result.provider,
+      model: result.model,
+      language: params.language,
+      promptVersion: params.promptVersion,
+      isMock,
+      requestId: result.requestId,
+      stopReason: result.stopReason,
+      usage: { inputTokens: result.inputTokens, outputTokens: result.outputTokens },
+    },
+    selectedTopic: topic,
+    selectedScoredTopic: scoredTopic,
+    assetBundle,
+    compatibility: {
+      sanityAppToolCompatible: true,
+      astroAppDataCompatible: true,
+      seoPersistenceAvailable: false,
+      cmsWritePerformed: false,
+      siteModified: false,
+      warnings: [SEO_PERSISTENCE_WARNING],
+    },
+    humanReview: {
+      required: true,
+      approved: false,
+      approvedBy: null,
+      approvedAt: null,
+      note: "AssetBundle must be reviewed before CMS Writer creates a Sanity draft.",
+    },
+    dataQuality: {
+      overallStatus: params.run.dataQuality.overallStatus,
+      warnings: params.run.dataQuality.warnings,
+      limitations: params.run.dataQuality.limitations,
+    },
+  };
+}

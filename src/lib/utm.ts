@@ -18,7 +18,8 @@ export interface UtmParams {
 // utm_campaign values baked into these links, instead of duplicating them.
 export const UTM_SOURCE = "growth_site";
 export const UTM_CAMPAIGN = "small_business_toolkit";
-const HOMEPAGE_DASHBOARD_URL = "https://whacka.app/dashboard";
+/** The one shared, platform-wide "start building" destination — not tied to any specific app. Exported so growth/agents/asset-generation-agent.ts can reuse this exact, already-existing value as a newly generated app's buildUrl fallback instead of inventing one. */
+export const HOMEPAGE_DASHBOARD_URL = "https://whacka.app/dashboard";
 
 function hasValue(value: string | undefined | null): value is string {
   return typeof value === "string" && value.trim().length > 0;

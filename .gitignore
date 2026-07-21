@@ -39,4 +39,8 @@ growth/signals/*.md
 growth/scores/*.json
 growth/scores/*.md
 
+# generated asset generation runs (keep the folder via .gitkeep)
+growth/assets/*.json
+growth/assets/*.md
+
 /secrets/
