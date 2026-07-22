@@ -232,23 +232,42 @@ export function buildFinalAssetBundleId(args: { campaignId: string; topicId: str
 /**
  * `demoUrl`/`remixUrl` are always null in v1 — no real per-app demo or
  * remix target exists yet for a not-yet-built concept, and this Agent never
- * invents one. `buildUrl` reuses the one real, already-existing,
- * platform-wide "start building" destination
- * (`src/lib/utm.ts`'s `HOMEPAGE_DASHBOARD_URL`) — not invented, not
- * per-app-specific, safe to offer for any generated concept. `app.ctaHref`
- * mirrors the existing project convention of `"#"` as the safe
- * no-real-target placeholder (see growth/contracts/README.md) when the
- * primary CTA type isn't `"build"`.
+ * invents one. Since a "primary" CTA is the one prominently rendered, a
+ * primary CTA must never point at a URL that doesn't exist: `"view_demo"`
+ * and `"remix"` always lack a real URL in v1, so choosing either as the
+ * primary type is deterministically replaced with `"build"` (whose URL —
+ * `src/lib/utm.ts`'s real, platform-wide `HOMEPAGE_DASHBOARD_URL` — always
+ * exists). `"copy_prompt"` is not a navigation CTA at all (it copies text,
+ * it doesn't link anywhere), so it is never considered to have a "missing"
+ * URL and is left as-is. `app.ctaHref` mirrors the existing project
+ * convention of `"#"` as the safe no-real-target placeholder (see
+ * growth/contracts/README.md) for `"copy_prompt"`.
  */
-export function resolveCtaAndUrls(cta: CtaInput, finalSlug: string): { ctaLabel: string; ctaHref: string; cta: AssetCta } {
-  const ctaHref = cta.primaryType === "build" ? HOMEPAGE_DASHBOARD_URL : "#";
-  const ctaLabel = (cta.primaryType === "build" ? cta.labels.build : null) ?? cta.labels.primary;
+const CTA_TYPES_REQUIRING_AN_UNAVAILABLE_URL = new Set<CtaInput["primaryType"]>(["view_demo", "remix"]);
+
+export interface CtaResolution {
+  ctaLabel: string;
+  ctaHref: string;
+  cta: AssetCta;
+  /** True when the model's requested primaryType had no available URL in v1 and was deterministically replaced with "build" instead. */
+  fallbackApplied: boolean;
+  requestedPrimaryType: CtaInput["primaryType"];
+}
+
+export function resolveCtaAndUrls(cta: CtaInput, finalSlug: string): CtaResolution {
+  const fallbackApplied = CTA_TYPES_REQUIRING_AN_UNAVAILABLE_URL.has(cta.primaryType);
+  const effectiveType = fallbackApplied ? "build" : cta.primaryType;
+
+  const ctaHref = effectiveType === "build" ? HOMEPAGE_DASHBOARD_URL : "#";
+  const ctaLabel = (effectiveType === "build" ? cta.labels.build : null) ?? cta.labels.primary;
 
   return {
     ctaLabel,
     ctaHref,
+    fallbackApplied,
+    requestedPrimaryType: cta.primaryType,
     cta: {
-      primaryType: cta.primaryType,
+      primaryType: effectiveType,
       demoUrl: null,
       remixUrl: null,
       buildUrl: HOMEPAGE_DASHBOARD_URL,
@@ -309,6 +328,55 @@ function prefixedList(prefix: string, items: string[]): string[] {
   return items.map((item) => truncate(`${prefix}: ${item}`, 500));
 }
 
+const NEAR_DUPLICATE_TOKEN_MIN_LENGTH = 3;
+const NEAR_DUPLICATE_OVERLAP_THRESHOLD = 0.6;
+
+function tokenizeForNearDuplicateCheck(text: string): Set<string> {
+  return new Set(
+    text
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, " ")
+      .split(/\s+/)
+      .filter((word) => word.length >= NEAR_DUPLICATE_TOKEN_MIN_LENGTH)
+  );
+}
+
+/** Overlap (Szymkiewicz–Simpson) coefficient — |A∩B| / min(|A|,|B|). Chosen over Jaccard because a short paraphrase of a longer sentence should still count as near-identical even though the two token sets are very different sizes. */
+function tokenOverlapCoefficient(a: Set<string>, b: Set<string>): number {
+  if (a.size === 0 || b.size === 0) return 0;
+  let intersection = 0;
+  for (const token of a) {
+    if (b.has(token)) intersection++;
+  }
+  return intersection / Math.min(a.size, b.size);
+}
+
+/**
+ * Deterministically drops near-identical entries from a single list (e.g.
+ * assumptions, or limitations — never called across the two, since an
+ * assumption and a limitation are never interchangeable regardless of
+ * wording overlap), keeping the first (earliest) occurrence of each
+ * near-duplicate group. Pure token-overlap text similarity only — no
+ * semantic/AI comparison, no topic-specific keywords, so this stays general
+ * across any topic or content. A genuinely distinct entry (low token
+ * overlap with everything already kept) is always preserved.
+ */
+export function dedupeNearIdenticalText(items: string[], threshold: number = NEAR_DUPLICATE_OVERLAP_THRESHOLD): string[] {
+  const kept: string[] = [];
+  const keptTokenSets: Set<string>[] = [];
+
+  for (const item of items) {
+    const tokens = tokenizeForNearDuplicateCheck(item);
+    const isNearDuplicate = keptTokenSets.some((keptTokens) => tokenOverlapCoefficient(tokens, keptTokens) >= threshold);
+    if (!isNearDuplicate) {
+      kept.push(item);
+      keptTokenSets.push(tokens);
+    }
+  }
+
+  return kept;
+}
+
 export interface AssembleAssetBundleProvenance {
   sourceFileNames: string[];
   sourceHashes: string[];
@@ -342,7 +410,10 @@ export interface AssembleAssetBundleParams {
  */
 export function assembleAssetBundle(params: AssembleAssetBundleParams): AssetBundle {
   const { analysis, context } = params;
-  const { ctaLabel, ctaHref, cta } = resolveCtaAndUrls(analysis.cta, params.finalSlug);
+  const { ctaLabel, ctaHref, cta, fallbackApplied: ctaFallbackApplied, requestedPrimaryType: requestedCtaPrimaryType } = resolveCtaAndUrls(
+    analysis.cta,
+    params.finalSlug
+  );
 
   const app: AssetApp = {
     name: analysis.appConcept.name,
@@ -400,6 +471,9 @@ export function assembleAssetBundle(params: AssembleAssetBundleParams): AssetBun
     integrationTestActive,
   });
 
+  const dedupedAssumptions = dedupeNearIdenticalText([...analysis.appConcept.creativeBrief.assumptions, ...analysis.generationNotes.assumptions]);
+  const dedupedLimitations = dedupeNearIdenticalText([...analysis.appConcept.creativeBrief.limitations, ...analysis.generationNotes.limitations]);
+
   const warnings = dedupe([
     ...(integrationTestActive
       ? [
@@ -418,10 +492,16 @@ export function assembleAssetBundle(params: AssembleAssetBundleParams): AssetBun
       ? [truncate(`Selected topic's recommendation is "${context.recommendation}", not "advance".`, 500)]
       : []),
     ...(params.provenance.isMock ? ["Generated by the Mock Provider — content is for engineering validation only, not real market copy."] : []),
-    ...prefixedList("Assumption", analysis.appConcept.creativeBrief.assumptions),
-    ...prefixedList("Limitation", analysis.appConcept.creativeBrief.limitations),
-    ...prefixedList("Assumption", analysis.generationNotes.assumptions),
-    ...prefixedList("Limitation", analysis.generationNotes.limitations),
+    ...(ctaFallbackApplied
+      ? [
+          truncate(
+            `CTA fallback: requested primary CTA type "${requestedCtaPrimaryType}" has no available URL in v1 — used "build" (the real dashboard destination) instead.`,
+            500
+          ),
+        ]
+      : []),
+    ...prefixedList("Assumption", dedupedAssumptions),
+    ...prefixedList("Limitation", dedupedLimitations),
     truncate(`Topic alignment: ${analysis.generationNotes.topicAlignment}`, 500),
     truncate(`Differentiation from existing apps: ${analysis.generationNotes.differentiationFromExistingApps}`, 500),
   ]).slice(0, 50);

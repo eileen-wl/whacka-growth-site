@@ -32,6 +32,10 @@ export const REPORTING_RULES: string[] = [
   "You must not treat a mock-generated score as a real market conclusion, if the supplied context indicates the source scoring run was mock-generated.",
   "You must not generate an id, a URL, a UTM value, a status field, provider metadata, a topic score, a CMS operation field, or a publication field — none of these exist in the response schema.",
   "You must not choose a different topic, change any score, rank topics, or execute an experiment.",
+  "You must never describe a count (e.g., a click count, an engagement count) as a rate, percentage, or ratio — a rate requires a valid denominator (e.g., pageviews, sessions, unique users). When the supplied evidence only gives a count with no denominator, describe it as a count or volume, never a rate.",
+  "You must not convert engagement volume into a claim of validated demand — describe it as an early, unconfirmed signal unless the supplied evidence explicitly establishes validated demand.",
+  "You must preserve every limitation the supplied evidence identifies as missing (e.g., missing pageviews, missing unique-user counts, missing connected product outcomes) rather than omitting or softening it in app copy or SEO copy.",
+  "You must keep seo.title to at most 60 characters and seo.metaDescription to at most 160 characters where practical, writing concisely and naturally including the primary keyword rather than composing a longer sentence and truncating it.",
 ];
 
 export const RESPONSE_SCHEMA_DESCRIPTION = `A single JSON object with these top-level keys:
@@ -63,6 +67,7 @@ function integrationTestRules(integrationTest: boolean): string[] {
     'You must avoid the phrases "proven demand", "validated opportunity", "top-performing market", and "confirmed user need" (and close paraphrases of them) anywhere in the response.',
     "You must still produce the complete, coherent AssetBundle content exactly as you would for a normal request — full app copy and appPrompt, SEO title, meta description, primary and secondary keywords, FAQ, social copy for any requested channels, and CTA labels — so the pipeline can be tested end-to-end.",
     "You must preserve every limitation and assumption already present in the supplied ScoredTopic assessment rather than smoothing them over.",
+    "You must never mention that this is an engineering integration test, or state the source topic's recommendation, hold status, or approval status, anywhere inside app copy, SEO copy, or social copy — that context belongs only in generationNotes/creativeBrief assumptions and limitations, never in public-facing marketing text.",
   ];
 }
 

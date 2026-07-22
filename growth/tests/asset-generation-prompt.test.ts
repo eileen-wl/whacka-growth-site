@@ -63,6 +63,26 @@ describe("REPORTING_RULES", () => {
     const joined = REPORTING_RULES.join(" ").toLowerCase();
     expect(joined).toContain("primarytype only from the supplied allowed cta types");
   });
+
+  it("requires evidence grounding — never a count described as a rate without a valid denominator, never engagement volume converted into validated demand", () => {
+    const joined = REPORTING_RULES.join(" ").toLowerCase();
+    expect(joined).toContain("must never describe a count");
+    expect(joined).toContain("rate requires a valid denominator");
+    expect(joined).toContain("must not convert engagement volume into a claim of validated demand");
+  });
+
+  it("requires preserving every limitation about missing evidence (pageviews, unique users, product outcomes)", () => {
+    const joined = REPORTING_RULES.join(" ").toLowerCase();
+    expect(joined).toContain("missing pageviews");
+    expect(joined).toContain("missing unique-user counts");
+    expect(joined).toContain("missing connected product outcomes");
+  });
+
+  it("gives a target length for SEO title and meta description", () => {
+    const joined = REPORTING_RULES.join(" ").toLowerCase();
+    expect(joined).toContain("seo.title to at most 60 characters");
+    expect(joined).toContain("seo.metadescription to at most 160 characters");
+  });
 });
 
 describe("buildReportingRules / buildSystemPrompt", () => {
@@ -98,6 +118,13 @@ describe("buildReportingRules / buildSystemPrompt", () => {
     const prompt = buildSystemPrompt("en", true);
     expect(prompt.toLowerCase()).toContain("engineering integration test");
     expect(prompt.toLowerCase()).toContain("proven demand");
+  });
+
+  it("forbids mentioning the integration test or the source recommendation inside public-facing copy", () => {
+    const rules = buildReportingRules("en", true);
+    const joined = rules.join(" ").toLowerCase();
+    expect(joined).toContain("never mention that this is an engineering integration test");
+    expect(joined).toContain("app copy, seo copy, or social copy");
   });
 
   it("does not add integration-test rules to the system prompt by default", () => {

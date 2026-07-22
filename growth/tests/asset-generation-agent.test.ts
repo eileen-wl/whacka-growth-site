@@ -8,6 +8,7 @@ import {
   buildExistingAppCatalog,
   buildFinalAssetBundleId,
   computeValidationStatus,
+  dedupeNearIdenticalText,
   resolveCtaAndUrls,
   resolveFinalSlug,
   resolveSelectedTopic,
@@ -312,14 +313,93 @@ describe("resolveCtaAndUrls", () => {
     expect(result.ctaHref).toBe("https://whacka.app/dashboard");
   });
 
-  it("sets ctaHref to the existing '#' no-target convention when primaryType is not 'build'", () => {
-    const result = resolveCtaAndUrls({ ...cta, primaryType: "view_demo" }, "inventory-tracker");
+  it("sets ctaHref to the existing '#' no-target convention for copy_prompt (not a navigation CTA, no URL is ever expected)", () => {
+    const result = resolveCtaAndUrls({ ...cta, primaryType: "copy_prompt" }, "inventory-tracker");
     expect(result.ctaHref).toBe("#");
+    expect(result.cta.primaryType).toBe("copy_prompt");
+    expect(result.fallbackApplied).toBe(false);
   });
 
   it("sets utmContent to the final slug deterministically", () => {
     const result = resolveCtaAndUrls(cta, "inventory-tracker");
     expect(result.cta.utmContent).toBe("inventory-tracker");
+  });
+
+  it("falls back to build when the requested primary type is view_demo (no real URL exists in v1)", () => {
+    const result = resolveCtaAndUrls({ ...cta, primaryType: "view_demo" }, "inventory-tracker");
+    expect(result.fallbackApplied).toBe(true);
+    expect(result.requestedPrimaryType).toBe("view_demo");
+    expect(result.cta.primaryType).toBe("build");
+    expect(result.ctaHref).toBe("https://whacka.app/dashboard");
+  });
+
+  it("falls back to build when the requested primary type is remix (no real URL exists in v1)", () => {
+    const result = resolveCtaAndUrls({ ...cta, primaryType: "remix" }, "inventory-tracker");
+    expect(result.fallbackApplied).toBe(true);
+    expect(result.requestedPrimaryType).toBe("remix");
+    expect(result.cta.primaryType).toBe("build");
+    expect(result.ctaHref).toBe("https://whacka.app/dashboard");
+  });
+
+  it("does not fall back when the requested primary type is already build", () => {
+    const result = resolveCtaAndUrls(cta, "inventory-tracker");
+    expect(result.fallbackApplied).toBe(false);
+    expect(result.requestedPrimaryType).toBe("build");
+  });
+
+  it("never fabricates a demo or remix URL, with or without a fallback", () => {
+    for (const primaryType of ["build", "view_demo", "remix", "copy_prompt"] as const) {
+      const result = resolveCtaAndUrls({ ...cta, primaryType }, "inventory-tracker");
+      expect(result.cta.demoUrl).toBeNull();
+      expect(result.cta.remixUrl).toBeNull();
+    }
+  });
+
+  it("falls back to the build label when the effective type is build, else the primary label", () => {
+    const result = resolveCtaAndUrls({ ...cta, primaryType: "remix", labels: { ...cta.labels, build: "Custom build label", primary: "Fallback primary label" } }, "inventory-tracker");
+    expect(result.ctaLabel).toBe("Custom build label");
+  });
+});
+
+describe("dedupeNearIdenticalText", () => {
+  it("keeps the first occurrence and drops a close paraphrase (high token overlap)", () => {
+    const result = dedupeNearIdenticalText([
+      "Assumes small business owners currently handle bookings through informal channels like phone or text.",
+      "Owners currently handle bookings via informal channels.",
+    ]);
+    expect(result).toEqual(["Assumes small business owners currently handle bookings through informal channels like phone or text."]);
+  });
+
+  it("keeps two genuinely distinct entries (low token overlap) — never removes a distinct limitation", () => {
+    const result = dedupeNearIdenticalText([
+      "Early CTA engagement is not the same as confirmed, repeatable demand.",
+      "Engagement signal lacks a denominator, unique-user counts, and connected product outcomes, so demand is unconfirmed.",
+    ]);
+    expect(result).toHaveLength(2);
+  });
+
+  it("returns an empty array for an empty input", () => {
+    expect(dedupeNearIdenticalText([])).toEqual([]);
+  });
+
+  it("keeps a single item unchanged", () => {
+    expect(dedupeNearIdenticalText(["A single distinct assumption."])).toEqual(["A single distinct assumption."]);
+  });
+
+  it("is order-preserving and keeps the earliest of a duplicate group", () => {
+    const result = dedupeNearIdenticalText([
+      "The topic overlaps the existing Bookly app and carries low novelty per the assessment.",
+      "This concept overlaps with the existing Bookly app's booking form category and must be positioned distinctly.",
+      "A completely unrelated limitation about a different aspect entirely.",
+    ]);
+    expect(result[0]).toBe("The topic overlaps the existing Bookly app and carries low novelty per the assessment.");
+    expect(result).toContain("A completely unrelated limitation about a different aspect entirely.");
+  });
+
+  it("respects a custom threshold", () => {
+    const items = ["Small business owners lose track of stock.", "Owners lose track of inventory counts."];
+    expect(dedupeNearIdenticalText(items, 0.99)).toHaveLength(2); // near-impossible overlap requirement — both kept
+    expect(dedupeNearIdenticalText(items, 0.01)).toHaveLength(1); // near-zero overlap requirement — treated as duplicates
   });
 });
 
@@ -529,6 +609,103 @@ describe("assembleAssetBundle", () => {
       allowHoldTopicUsed: false,
     });
     expect(bundle.validation.warnings.some((w) => w.includes("integration-test override"))).toBe(false);
+  });
+
+  it("records a CTA-fallback warning and never leaves the primary CTA pointed at a missing URL", () => {
+    const context = buildContext();
+    const analysis = fixtureAnalysis({ cta: { ...fixtureAnalysis().cta, primaryType: "remix" } });
+    const bundle = assembleAssetBundle({
+      analysis,
+      context,
+      finalSlug: "inventory-tracker",
+      slugConflicted: false,
+      slugOriginalSuggestion: "inventory-tracker",
+      campaignId: CAMPAIGN.id,
+      generatedAt: "2026-07-16T00:00:00.000Z",
+      promptVersion: "1.0.0",
+      provenance,
+      allowUnapprovedTopicUsed: false,
+      allowHoldTopicUsed: false,
+    });
+    expect(bundle.cta.primaryType).toBe("build");
+    expect(bundle.app.ctaHref).toBe("https://whacka.app/dashboard");
+    expect(bundle.validation.warnings.some((w) => w.includes("CTA fallback") && w.includes("remix"))).toBe(true);
+  });
+
+  it("does not record a CTA-fallback warning when the requested primary type already has a real URL", () => {
+    const context = buildContext();
+    const bundle = assembleAssetBundle({
+      analysis: fixtureAnalysis(), // default cta.primaryType is "build"
+      context,
+      finalSlug: "inventory-tracker",
+      slugConflicted: false,
+      slugOriginalSuggestion: "inventory-tracker",
+      campaignId: CAMPAIGN.id,
+      generatedAt: "2026-07-16T00:00:00.000Z",
+      promptVersion: "1.0.0",
+      provenance,
+      allowUnapprovedTopicUsed: false,
+      allowHoldTopicUsed: false,
+    });
+    expect(bundle.validation.warnings.some((w) => w.includes("CTA fallback"))).toBe(false);
+  });
+
+  it("deduplicates near-identical assumptions/limitations across creativeBrief and generationNotes, but keeps distinct ones", () => {
+    const context = buildContext();
+    const analysis = fixtureAnalysis({
+      appConcept: {
+        ...fixtureAnalysis().appConcept,
+        creativeBrief: {
+          ...fixtureAnalysis().appConcept.creativeBrief,
+          assumptions: ["Assumes small business owners currently handle bookings through informal channels like phone or text."],
+          limitations: ["Early CTA engagement is not the same as confirmed, repeatable demand."],
+        },
+      },
+      generationNotes: {
+        ...fixtureAnalysis().generationNotes,
+        assumptions: ["Owners currently handle bookings via informal channels."], // near-duplicate of the creativeBrief assumption above
+        limitations: ["Engagement signal lacks a denominator, unique-user counts, and connected product outcomes, so demand is unconfirmed."], // distinct
+      },
+    });
+    const bundle = assembleAssetBundle({
+      analysis,
+      context,
+      finalSlug: "inventory-tracker",
+      slugConflicted: false,
+      slugOriginalSuggestion: "inventory-tracker",
+      campaignId: CAMPAIGN.id,
+      generatedAt: "2026-07-16T00:00:00.000Z",
+      promptVersion: "1.0.0",
+      provenance,
+      allowUnapprovedTopicUsed: false,
+      allowHoldTopicUsed: false,
+    });
+    const assumptionWarnings = bundle.validation.warnings.filter((w) => w.startsWith("Assumption:"));
+    const limitationWarnings = bundle.validation.warnings.filter((w) => w.startsWith("Limitation:"));
+    expect(assumptionWarnings).toHaveLength(1); // the near-duplicate was dropped
+    expect(limitationWarnings).toHaveLength(2); // both distinct limitations kept
+  });
+
+  it("never mechanically truncates seo.title or seo.metaDescription — passes them through verbatim regardless of length", () => {
+    const context = buildContext();
+    const longTitle = "A".repeat(120);
+    const longMeta = "B".repeat(250);
+    const analysis = fixtureAnalysis({ seo: { ...fixtureAnalysis().seo, title: longTitle, metaDescription: longMeta } });
+    const bundle = assembleAssetBundle({
+      analysis,
+      context,
+      finalSlug: "inventory-tracker",
+      slugConflicted: false,
+      slugOriginalSuggestion: "inventory-tracker",
+      campaignId: CAMPAIGN.id,
+      generatedAt: "2026-07-16T00:00:00.000Z",
+      promptVersion: "1.0.0",
+      provenance,
+      allowUnapprovedTopicUsed: false,
+      allowHoldTopicUsed: false,
+    });
+    expect(bundle.seo.title).toBe(longTitle);
+    expect(bundle.seo.metaDescription).toBe(longMeta);
   });
 
   it("does not mutate the input analysis or context", () => {
