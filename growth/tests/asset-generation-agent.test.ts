@@ -354,6 +354,16 @@ describe("computeValidationStatus", () => {
     const result = computeValidationStatus({ ...baseCtx, primaryCtaUrlAvailable: false });
     expect(result.reasons.some((r) => r.toLowerCase().includes("no real url"))).toBe(true);
   });
+
+  it("forces needs_review when integrationTestActive is true, even if every other trigger is clean", () => {
+    const result = computeValidationStatus({ ...baseCtx, integrationTestActive: true });
+    expect(result.status).toBe("needs_review");
+    expect(result.reasons.some((r) => r.toLowerCase().includes("integration-test"))).toBe(true);
+  });
+
+  it("defaults integrationTestActive to false when omitted (unchanged existing behavior)", () => {
+    expect(computeValidationStatus(baseCtx).status).toBe("valid");
+  });
 });
 
 describe("assembleAssetBundle", () => {
@@ -476,6 +486,51 @@ describe("assembleAssetBundle", () => {
     expect(bundle.validation.warnings.some((w) => w.includes("conflicts with an existing app"))).toBe(true);
   });
 
+  it("adds the four required integration-test warnings and forces needs_review when integrationTestActive is true", () => {
+    const context = buildContext();
+    const bundle = assembleAssetBundle({
+      analysis: fixtureAnalysis(),
+      context,
+      finalSlug: "inventory-tracker",
+      slugConflicted: false,
+      slugOriginalSuggestion: "inventory-tracker",
+      campaignId: CAMPAIGN.id,
+      generatedAt: "2026-07-16T00:00:00.000Z",
+      promptVersion: "1.0.0",
+      provenance,
+      allowUnapprovedTopicUsed: false,
+      allowHoldTopicUsed: false,
+      integrationTestActive: true,
+    });
+    expect(bundle.validation.status).toBe("needs_review");
+    expect(bundle.validation.warnings).toEqual(
+      expect.arrayContaining([
+        "Generated under explicit engineering integration-test override.",
+        'Source topic recommendation is "advance".',
+        "This output is not approved as a business experiment.",
+        "Human content review is required before any CMS draft write.",
+      ])
+    );
+  });
+
+  it("omits the integration-test warnings when integrationTestActive is false or omitted", () => {
+    const context = buildContext();
+    const bundle = assembleAssetBundle({
+      analysis: fixtureAnalysis(),
+      context,
+      finalSlug: "inventory-tracker",
+      slugConflicted: false,
+      slugOriginalSuggestion: "inventory-tracker",
+      campaignId: CAMPAIGN.id,
+      generatedAt: "2026-07-16T00:00:00.000Z",
+      promptVersion: "1.0.0",
+      provenance,
+      allowUnapprovedTopicUsed: false,
+      allowHoldTopicUsed: false,
+    });
+    expect(bundle.validation.warnings.some((w) => w.includes("integration-test override"))).toBe(false);
+  });
+
   it("does not mutate the input analysis or context", () => {
     const context = buildContext();
     const analysis = fixtureAnalysis();
@@ -578,5 +633,53 @@ describe("runAssetGenerationAgent — end to end", () => {
   it("throws AssetGenerationInputError for an unknown selected topic ID", async () => {
     const run = fixtureTopicScoringRun();
     await expect(runAssetGenerationAgent({ ...baseParams, topicId: "topic_unknown", run, provider: new FakeProvider(fixtureAnalysis()) })).rejects.toThrow(AssetGenerationInputError);
+  });
+
+  it("defaults executionPurpose to business_experiment and integrationTestReview to null when integrationTest is not supplied", async () => {
+    const run = fixtureTopicScoringRun();
+    const result = await runAssetGenerationAgent({ ...baseParams, run, provider: new FakeProvider(fixtureAnalysis()) });
+    expect(result.executionPurpose).toBe("business_experiment");
+    expect(result.integrationTestReview).toBeNull();
+  });
+
+  it("sets executionPurpose to integration_test and populates integrationTestReview when integrationTest is supplied", async () => {
+    const run = fixtureTopicScoringRun({
+      scoredTopics: [{ ...fixtureTopicScoringRun().scoredTopics[0], recommendation: "hold", blockers: ["insufficient_evidence: not enough signal"] }],
+    });
+    const result = await runAssetGenerationAgent({
+      ...baseParams,
+      run,
+      provider: new FakeProvider(fixtureAnalysis()),
+      integrationTest: { reviewedBy: "Joy", reviewNote: "Engineering check." },
+    });
+    expect(result.executionPurpose).toBe("integration_test");
+    expect(result.integrationTestReview).toEqual({
+      confirmed: true,
+      reviewedBy: "Joy",
+      reviewNote: "Engineering check.",
+      sourceRecommendation: "hold",
+      businessApprovalGranted: false,
+    });
+    expect(result.assetBundle.validation.status).toBe("needs_review");
+    expect(result.humanReview.required).toBe(true);
+    expect(result.humanReview.approved).toBe(false);
+    expect(result.compatibility.cmsWritePerformed).toBe(false);
+    expect(result.compatibility.siteModified).toBe(false);
+  });
+
+  it("does not mutate the source ScoredTopic's recommendation/blockers under integration-test", async () => {
+    const run = fixtureTopicScoringRun({
+      scoredTopics: [{ ...fixtureTopicScoringRun().scoredTopics[0], recommendation: "hold", blockers: ["insufficient_evidence: not enough signal"] }],
+    });
+    const before = JSON.stringify(run.scoredTopics);
+    const result = await runAssetGenerationAgent({
+      ...baseParams,
+      run,
+      provider: new FakeProvider(fixtureAnalysis()),
+      integrationTest: { reviewedBy: "Joy", reviewNote: null },
+    });
+    expect(JSON.stringify(run.scoredTopics)).toBe(before);
+    expect(result.selectedScoredTopic.recommendation).toBe("hold");
+    expect(result.selectedScoredTopic.blockers).toEqual(["insufficient_evidence: not enough signal"]);
   });
 });

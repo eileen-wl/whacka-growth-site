@@ -1437,6 +1437,68 @@ page** — `compatibility.cmsWritePerformed` and `.siteModified` are always
 | `Could not resolve a valid slug from the suggested name "..."` | The provider's slug suggestion normalized to an empty string. |
 | `Model response did not match the required schema: ...` | Zod validation failed (bad enum, empty required field, unknown key, invented URL/ID/status field, etc.). |
 
+### Integration-test mode — engineering verification only, never a business experiment
+
+`--integration-test` is a tightly-controlled escape hatch that lets a real
+Anthropic call reach a `hold` topic, **for engineering verification of the
+Asset Generation → human review → CMS Writer pipeline only**. It does not
+change Topic Scoring's output or recommendation, does not authorize a
+growth experiment, and does not write or publish anything automatically.
+Normal live behavior is completely unchanged: a `hold` topic is still
+rejected in live Anthropic mode with no flags, exactly as before.
+
+Required flags, **all together**, with no other override existing anywhere
+in this pipeline (no `--force`, `--skip-validation`, `--publish`, or
+`--approve-topic`):
+
+- `--integration-test`
+- `--confirm-integration-test`
+- `--reviewed-by "<name>"`
+- `--allow-hold-topic` (only needed when the selected topic actually is `hold`)
+- `--allow-unapproved-topic` (only needed when the source run isn't human-approved — the existing, unchanged gate)
+
+Optional: `--review-note "<text>"`.
+
+Validation rules:
+
+| Combination | Result |
+| --- | --- |
+| `--integration-test` without `--confirm-integration-test` | Rejected |
+| `--confirm-integration-test` without `--integration-test` | Rejected |
+| `--integration-test` without `--reviewed-by <name>` | Rejected |
+| `--integration-test` with `--dry-run` | Rejected — `--dry-run` never calls a provider, so there is nothing to integration-test; use `--provider mock` to preview locally instead |
+| An invalid/unknown `--topic-id` | Always rejected — no flag combination ever bypasses topic resolution |
+| An unsupported Topic Scoring `schemaVersion` | Always rejected — no flag combination ever bypasses schema validation |
+
+```bash
+npm run growth:generate-assets -- \
+  --start 2026-07-08 --end 2026-07-14 \
+  --topic-id <hold-topic-id> \
+  --provider anthropic \
+  --integration-test --confirm-integration-test --reviewed-by "Joy" \
+  --review-note "Engineering integration test only; the source topic remains hold." \
+  --allow-hold-topic --allow-unapproved-topic
+```
+
+What the output records (see `growth/types/asset-generation.ts`):
+
+- `executionPurpose: "integration_test"` (normal runs resolve to `"business_experiment"` — always set explicitly, optional on the type only for backward compatibility with runs written before this field existed).
+- `integrationTestReview: { confirmed: true, reviewedBy, reviewNote, sourceRecommendation, businessApprovalGranted: false }` — `sourceRecommendation` is the topic's actual (unmodified) recommendation; `businessApprovalGranted` can never be `true` anywhere in this contract.
+- Four explicit `AssetBundle.validation.warnings`: generated under an explicit engineering integration-test override; the source recommendation; not approved as a business experiment; human content review required before any CMS draft write.
+- `assetBundle.validation.status` stays `"needs_review"`, `humanReview.required` stays `true`, `compatibility.cmsWritePerformed`/`.siteModified` stay `false`, `compatibility.seoPersistenceAvailable` stays `true` — identical guarantees to a normal run.
+- The source `ScoredTopic` (recommendation, blockers) is never mutated — Topic Scoring's own output file is never touched.
+- The Anthropic prompt itself is told this is an engineering integration test: it must not claim demand is validated or that the topic is approved, must avoid phrases like "proven demand"/"validated opportunity"/"top-performing market"/"confirmed user need", and must still produce the complete AssetBundle content (app prompt, page copy, SEO title, meta description, keywords, FAQ, social copy, CTA labels, UTM-mapping-ready fields) so the pipeline can actually be exercised end-to-end.
+
+Output filenames are visibly distinguishable from normal business assets:
+
+```
+growth/assets/asset-generation-{start}_to_{end}-{topic-id}.integration-test.json
+growth/assets/asset-generation-{start}_to_{end}-{topic-id}.integration-test.md
+```
+
+Collision-safe timestamping and `--overwrite` work exactly as for a normal
+run. Normal (non-integration-test) filenames are completely unchanged.
+
 ## CMS Writer
 
 ### Role in the fixed Growth Loop, and why it is not an Agent
@@ -1583,6 +1645,45 @@ other generated-output folder in `growth/`.
 | `The selected Asset Generation run ("...") was mock-generated ... pass --allow-mock-input to override` | `--write-draft` with mock input and no override. |
 | `--write-draft requires Sanity configuration. Missing: ...` | One or more of `PUBLIC_SANITY_PROJECT_ID`/`PUBLIC_SANITY_DATASET`/`SANITY_API_TOKEN` is unset. |
 | `Sanity rejected the request: authentication failed ...` / `Sanity denied permission ...` / `Sanity project or dataset not found ...` | A real write failed at Sanity's API — sanitized, never includes the token. |
+| `The selected Asset Generation run ("...") is an engineering integration-test output ... pass --allow-integration-test-input to override` | `--write-draft` with `executionPurpose: "integration_test"` source input and no override. |
+
+### Integration-test input (`executionPurpose: "integration_test"`)
+
+An Asset Generation run produced under `--integration-test` (see above) is
+never auto-discovered by plain `--topic-id` discovery — its
+`.integration-test.json` filename is deliberately excluded from the
+discovery pattern, so it can only ever be loaded via explicit `--input`.
+
+- **`--dry-run`** accepts an integration-test `--input` file with no extra
+  flag — the preview and its Markdown clearly show
+  `sourceExecutionPurpose: "integration_test"`, a prominent banner, and
+  state plainly that the source is not business-approved. No network
+  request is made either way.
+- **`--write-draft`** (a real Sanity write) refuses integration-test input
+  by default. One additional explicit flag is required:
+
+  ```
+  --allow-integration-test-input
+  ```
+
+  Without it, the real draft write is rejected before any network call.
+  Even with it: only a `drafts.appTool-*` document is ever written (never
+  published, never the canonical id), the business experiment is never
+  marked approved (no field in this pipeline can express that), and the
+  override is recorded in the CMS receipt's provenance
+  (`allowIntegrationTestInputUsed: true`). Integration-test metadata
+  (`executionPurpose`, `integrationTestReview`) is never included in the
+  Sanity `appTool` payload itself — that payload only ever maps from
+  `AssetBundle`, which has no such fields.
+
+```bash
+# Future command — do not run until the integration-test AssetBundle has
+# actually been human-reviewed:
+npm run growth:cms-write -- \
+  --input growth/assets/asset-generation-....integration-test.json \
+  --write-draft --confirm-reviewed --reviewed-by "Joy" \
+  --allow-integration-test-input
+```
 
 See `growth/cms/README.md` for the full AssetBundle → CMSWriteRequest →
 appTool payload mapping.

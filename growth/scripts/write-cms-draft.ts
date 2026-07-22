@@ -46,6 +46,8 @@ export interface WriteCmsDraftArgs {
   reviewedBy?: string;
   reviewNote?: string;
   allowMockInput: boolean;
+  /** Required (in addition to --write-draft/--confirm-reviewed/--reviewed-by) for a real Sanity draft write from an executionPurpose: "integration_test" Asset Generation source. Never required for --dry-run. */
+  allowIntegrationTestInput: boolean;
   overwrite: boolean;
 }
 
@@ -55,6 +57,7 @@ export function parseArgs(argv: string[]): WriteCmsDraftArgs {
     writeDraft: false,
     confirmReviewed: false,
     allowMockInput: false,
+    allowIntegrationTestInput: false,
     overwrite: false,
   };
 
@@ -80,6 +83,8 @@ export function parseArgs(argv: string[]): WriteCmsDraftArgs {
       args.reviewNote = argv[++i];
     } else if (arg === "--allow-mock-input") {
       args.allowMockInput = true;
+    } else if (arg === "--allow-integration-test-input") {
+      args.allowIntegrationTestInput = true;
     } else if (arg === "--overwrite") {
       args.overwrite = true;
     } else {
@@ -200,10 +205,21 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-/** Matches `asset-generation-{start}_to_{end}-{topicId}.json` and its timestamped collision variants — the topic-id-suffixed convention introduced by growth/scripts/generate-assets.ts, not supported by growth/lib/snapshot-discovery.ts's own prefix-only matcher. */
+/** The exact shape `new Date().toISOString().replace(/[:.]/g, "-")` produces, e.g. "2026-07-16T08-25-56-998Z" — the only kind of extra segment a normal (non-integration-test) collision-safe filename ever has. */
+const TIMESTAMP_SUFFIX_PATTERN = "\\d{4}-\\d{2}-\\d{2}T\\d{2}-\\d{2}-\\d{2}-\\d{3}Z";
+
+/**
+ * Matches `asset-generation-{start}_to_{end}-{topicId}.json` and its
+ * timestamped collision variants — the topic-id-suffixed convention
+ * introduced by growth/scripts/generate-assets.ts, not supported by
+ * growth/lib/snapshot-discovery.ts's own prefix-only matcher. Deliberately
+ * does NOT match the `.integration-test[.timestamp].json` variant — an
+ * integration-test output must never be auto-discovered as a normal
+ * business asset; it can only be loaded via explicit `--input`.
+ */
 function findMatchingAssetGenerationFiles(dir: string, period: DateRange, topicId: string, listDir: FileSystemDeps["listDir"]): string[] {
   const base = `asset-generation-${period.start}_to_${period.end}-${topicId}`;
-  const pattern = new RegExp(`^${escapeRegExp(base)}(\\.[^.]+)?\\.json$`);
+  const pattern = new RegExp(`^${escapeRegExp(base)}(\\.${TIMESTAMP_SUFFIX_PATTERN})?\\.json$`);
   return listDir(dir).filter((name) => pattern.test(name));
 }
 
@@ -233,6 +249,9 @@ function isValidFinalAssetGenerationRun(value: unknown): value is FinalAssetGene
   const dataQuality = v.dataQuality as Record<string, unknown> | undefined;
   const status = dataQuality?.overallStatus;
   if (status !== "complete" && status !== "partial" && status !== "invalid") return false;
+
+  // Optional field — absent on files written before it existed, which must be treated as "business_experiment". When present, only the two known values are legitimate.
+  if (v.executionPurpose !== undefined && v.executionPurpose !== "business_experiment" && v.executionPurpose !== "integration_test") return false;
 
   return true;
 }
@@ -344,6 +363,26 @@ export function assertLiveMockInputAllowed(run: FinalAssetGenerationRun, filenam
   }
 }
 
+/**
+ * A real Sanity draft write (`--write-draft`) refuses an
+ * `executionPurpose: "integration_test"` Asset Generation source by default
+ * — an engineering integration test is never itself business approval.
+ * `--allow-integration-test-input` opts in explicitly, for exactly this
+ * engineering-verification purpose; even then only a `drafts.` document is
+ * ever written (never published, never marked business-approved) and the
+ * override is recorded in the CMS receipt. Never called for `--dry-run`,
+ * which always accepts integration-test input.
+ */
+export function assertLiveIntegrationTestInputAllowed(run: FinalAssetGenerationRun, filename: string, allowIntegrationTestInput: boolean): void {
+  if (run.executionPurpose === "integration_test" && !allowIntegrationTestInput) {
+    throw new CmsWriteConfigError(
+      `The selected Asset Generation run ("${filename}") is an engineering integration-test output (executionPurpose = "integration_test"), ` +
+        "not a business-approved experiment. A real draft write refuses integration-test input by default — pass --allow-integration-test-input " +
+        "to override for explicit testing. Even with the override, only a Sanity draft is written and the business experiment is never marked approved."
+    );
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Output paths (topic-id-suffixed, mirroring growth/scripts/generate-assets.ts's
 // own local resolver — a naming convention unique to this pipeline stage).
@@ -391,6 +430,7 @@ export async function run(argv: string[], deps: FileSystemDeps = defaultDeps): P
       dataset: null,
       review: { reviewedBy: args.reviewedBy ?? null, reviewNote: args.reviewNote ?? null },
       allowMockInputUsed: args.allowMockInput,
+      allowIntegrationTestInputUsed: args.allowIntegrationTestInput,
     });
 
     const preview = buildCmsWriteDryRunPreview(cmsRun, { allowMockInputUsed: args.allowMockInput });
@@ -405,6 +445,7 @@ export async function run(argv: string[], deps: FileSystemDeps = defaultDeps): P
 
   // --write-draft
   assertLiveMockInputAllowed(assetGenerationRun, filename, args.allowMockInput);
+  assertLiveIntegrationTestInputAllowed(assetGenerationRun, filename, args.allowIntegrationTestInput);
 
   const env = readSanityEnv();
   const config = assertSanityConfigured(env);
@@ -418,6 +459,7 @@ export async function run(argv: string[], deps: FileSystemDeps = defaultDeps): P
     dataset: config.dataset,
     review: { reviewedBy: args.reviewedBy as string, reviewNote: args.reviewNote ?? null },
     allowMockInputUsed: args.allowMockInput,
+    allowIntegrationTestInputUsed: args.allowIntegrationTestInput,
     sanityClient: client,
     projectId: config.projectId,
     apiVersion: config.apiVersion,
@@ -441,6 +483,9 @@ async function main(): Promise<void> {
 
     if (result.mode === "dry-run") {
       const { preview } = result;
+      if (preview.sourceExecutionPurpose === "integration_test") {
+        console.log("[growth:cms-write] *** Source Asset Generation run is an ENGINEERING INTEGRATION TEST — not business-approved ***");
+      }
       console.log(`[growth:cms-write] Mode: dry-run (no network request made)`);
       console.log(`[growth:cms-write] Source Asset Generation run: ${preview.sourceAssetGenerationFilename}`);
       console.log(`[growth:cms-write] Period: ${preview.period.start} to ${preview.period.end}`);
@@ -456,6 +501,9 @@ async function main(): Promise<void> {
     }
 
     const { run: finalRun } = result;
+    if (finalRun.provenance.sourceExecutionPurpose === "integration_test") {
+      console.log("[growth:cms-write] *** Source Asset Generation run is an ENGINEERING INTEGRATION TEST — --allow-integration-test-input override recorded in this receipt ***");
+    }
     console.log(`[growth:cms-write] Mode: draft-write`);
     console.log(`[growth:cms-write] Draft document written: ${finalRun.receipt?.draftDocumentId ?? "unknown"}`);
     console.log(`[growth:cms-write] Canonical document ID: ${finalRun.receipt?.canonicalDocumentId ?? "unknown"}`);

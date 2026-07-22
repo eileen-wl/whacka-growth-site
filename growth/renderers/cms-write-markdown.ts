@@ -22,6 +22,16 @@ export function renderCmsWriteMarkdown(run: FinalCmsWriterRun): string {
 
   lines.push("# CMS Write Review", "");
 
+  if (run.provenance.sourceExecutionPurpose === "integration_test") {
+    lines.push(
+      "> 🛑 **Source Asset Generation run is an ENGINEERING INTEGRATION TEST** — it is **not** a business-approved growth experiment. " +
+        "This CMS write step never grants business approval; it only tests that a draft can be created.",
+      ""
+    );
+    if (run.provenance.allowIntegrationTestInputUsed) {
+      lines.push("> ⚠ `--allow-integration-test-input` was used to permit this draft write from integration-test input.", "");
+    }
+  }
   if (run.provenance.sourceAssetGenerationIsMock) {
     lines.push("> ⚠ The source AssetBundle was produced by the **Mock Provider** — for engineering validation only, not real market copy.", "");
   }
@@ -38,6 +48,7 @@ export function renderCmsWriteMarkdown(run: FinalCmsWriterRun): string {
   lines.push("## Mode", "", run.mode === "dry_run" ? "`dry_run` — preview only, no write performed." : "`draft_write` — a real Sanity draft write was performed.", "");
 
   lines.push("## Source Asset", "");
+  lines.push(`- **Execution purpose:** ${run.provenance.sourceExecutionPurpose ?? "business_experiment"}`);
   lines.push(`- **Filename:** ${run.provenance.sourceAssetGenerationFilename}`);
   lines.push(`- **SHA-256:** \`${run.provenance.sourceAssetGenerationSha256}\``);
   lines.push(`- **Generated at:** ${run.provenance.sourceAssetGenerationGeneratedAt}`);

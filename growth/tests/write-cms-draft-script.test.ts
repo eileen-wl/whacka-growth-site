@@ -16,6 +16,7 @@ import {
   CmsWriteConfigError,
   CmsWriteDateRangeError,
   CmsWriteInputError,
+  assertLiveIntegrationTestInputAllowed,
   assertLiveMockInputAllowed,
   assertSanityConfigured,
   assertValidDateRange,
@@ -203,6 +204,12 @@ describe("parseArgs", () => {
     expect(args.overwrite).toBe(true);
   });
 
+  it("parses --allow-integration-test-input, defaulting to false", () => {
+    expect(parseArgs([...baseArgv, "--dry-run"]).allowIntegrationTestInput).toBe(false);
+    const args = parseArgs([...baseArgv, "--write-draft", "--confirm-reviewed", "--reviewed-by", "Joy", "--allow-integration-test-input"]);
+    expect(args.allowIntegrationTestInput).toBe(true);
+  });
+
   it("rejects an unrecognized argument", () => {
     expect(() => parseArgs([...baseArgv, "--dry-run", "--publish"])).toThrow(/Unrecognized argument/);
   });
@@ -319,6 +326,65 @@ describe("loadAssetGenerationRun", () => {
     const args = parseArgs(["--start", PERIOD.start, "--end", PERIOD.end, "--topic-id", "topic_other", "--input", "custom-name.json", "--dry-run"]);
     expect(() => loadAssetGenerationRun(args, PERIOD, deps)).toThrow(CmsWriteInputError);
   });
+
+  it("never auto-discovers a .integration-test.json file — it is invisible to plain --topic-id discovery", () => {
+    const integrationTestFilename = `asset-generation-${PERIOD.start}_to_${PERIOD.end}-${TOPIC_ID}.integration-test.json`;
+    const deps = fakeDeps({ [integrationTestFilename]: fixtureAssetGenerationRun({ executionPurpose: "integration_test" }) });
+    const args = parseArgs(["--start", PERIOD.start, "--end", PERIOD.end, "--topic-id", TOPIC_ID, "--dry-run"]);
+    expect(() => loadAssetGenerationRun(args, PERIOD, deps)).toThrow(CmsWriteInputError);
+  });
+
+  it("never auto-discovers a .integration-test.{timestamp}.json collision variant either", () => {
+    const integrationTestFilename = `asset-generation-${PERIOD.start}_to_${PERIOD.end}-${TOPIC_ID}.integration-test.2026-07-16T08-25-56-998Z.json`;
+    const deps = fakeDeps({ [integrationTestFilename]: fixtureAssetGenerationRun({ executionPurpose: "integration_test" }) });
+    const args = parseArgs(["--start", PERIOD.start, "--end", PERIOD.end, "--topic-id", TOPIC_ID, "--dry-run"]);
+    expect(() => loadAssetGenerationRun(args, PERIOD, deps)).toThrow(CmsWriteInputError);
+  });
+
+  it("still discovers a normal timestamped collision variant (regression check for the tightened regex)", () => {
+    const timestampedFilename = `asset-generation-${PERIOD.start}_to_${PERIOD.end}-${TOPIC_ID}.2026-07-16T08-25-56-998Z.json`;
+    const deps = fakeDeps({ [timestampedFilename]: fixtureAssetGenerationRun() });
+    const args = parseArgs(["--start", PERIOD.start, "--end", PERIOD.end, "--topic-id", TOPIC_ID, "--dry-run"]);
+    const loaded = loadAssetGenerationRun(args, PERIOD, deps);
+    expect(loaded.filename).toBe(timestampedFilename);
+  });
+
+  it("--input still accepts an integration-test file explicitly, after validating its executionPurpose shape", () => {
+    const deps = fakeDeps({ "custom-name.json": fixtureAssetGenerationRun({ executionPurpose: "integration_test" }) });
+    const args = parseArgs(["--start", PERIOD.start, "--end", PERIOD.end, "--input", "custom-name.json", "--dry-run"]);
+    const loaded = loadAssetGenerationRun(args, PERIOD, deps);
+    expect(loaded.run.executionPurpose).toBe("integration_test");
+  });
+
+  it("rejects a malformed executionPurpose value", () => {
+    const deps = fakeDeps({ "custom-name.json": fixtureAssetGenerationRun({ executionPurpose: "not_a_real_value" }) });
+    const args = parseArgs(["--start", PERIOD.start, "--end", PERIOD.end, "--input", "custom-name.json", "--dry-run"]);
+    expect(() => loadAssetGenerationRun(args, PERIOD, deps)).toThrow(CmsWriteInputError);
+  });
+});
+
+describe("assertLiveIntegrationTestInputAllowed", () => {
+  it("throws for executionPurpose: integration_test without the override", () => {
+    const run = fixtureAssetGenerationRun({ executionPurpose: "integration_test" });
+    expect(() => assertLiveIntegrationTestInputAllowed(run, RUN_FILENAME, false)).toThrow(CmsWriteConfigError);
+  });
+
+  it("does not throw when the override is used", () => {
+    const run = fixtureAssetGenerationRun({ executionPurpose: "integration_test" });
+    expect(() => assertLiveIntegrationTestInputAllowed(run, RUN_FILENAME, true)).not.toThrow();
+  });
+
+  it("does not throw for a normal business_experiment run, override or not", () => {
+    const run = fixtureAssetGenerationRun({ executionPurpose: "business_experiment" });
+    expect(() => assertLiveIntegrationTestInputAllowed(run, RUN_FILENAME, false)).not.toThrow();
+    expect(() => assertLiveIntegrationTestInputAllowed(run, RUN_FILENAME, true)).not.toThrow();
+  });
+
+  it("does not throw when executionPurpose is absent (an old run, defaults to business_experiment)", () => {
+    const run = fixtureAssetGenerationRun();
+    delete (run as unknown as Record<string, unknown>).executionPurpose;
+    expect(() => assertLiveIntegrationTestInputAllowed(run, RUN_FILENAME, false)).not.toThrow();
+  });
 });
 
 describe("assertLiveMockInputAllowed", () => {
@@ -378,6 +444,18 @@ describe("run — dry-run", () => {
     const result = await run(["--start", PERIOD.start, "--end", PERIOD.end, "--topic-id", TOPIC_ID, "--dry-run"], deps);
     expect(result.mode).toBe("dry-run");
   });
+
+  it("accepts integration-test input via explicit --input without --allow-integration-test-input, and shows the warning/not-business-approved statement", async () => {
+    const deps = fakeDeps({ "integration-test-input.json": fixtureAssetGenerationRun({ executionPurpose: "integration_test" }) });
+    const result = await run(
+      ["--start", PERIOD.start, "--end", PERIOD.end, "--input", "integration-test-input.json", "--dry-run"],
+      deps
+    );
+    expect(result.mode).toBe("dry-run");
+    if (result.mode !== "dry-run") throw new Error("unreachable");
+    expect(result.preview.sourceExecutionPurpose).toBe("integration_test");
+    expect(createOrReplaceMock).not.toHaveBeenCalled();
+  });
 });
 
 describe("run — write-draft", () => {
@@ -435,5 +513,42 @@ describe("run — write-draft", () => {
     const deps = fakeDeps({ [RUN_FILENAME]: fixtureAssetGenerationRun() });
     await run(["--start", PERIOD.start, "--end", PERIOD.end, "--topic-id", TOPIC_ID, "--write-draft", "--confirm-reviewed", "--reviewed-by", "Joy", "--allow-mock-input"], deps);
     expect(createOrReplaceMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects a real draft write from integration-test input without --allow-integration-test-input", async () => {
+    vi.stubEnv("PUBLIC_SANITY_PROJECT_ID", "proj123");
+    vi.stubEnv("PUBLIC_SANITY_DATASET", "production");
+    vi.stubEnv("SANITY_API_TOKEN", "sk-test-token");
+    const deps = fakeDeps({ [RUN_FILENAME]: fixtureAssetGenerationRun({ executionPurpose: "integration_test" }) });
+    await expect(
+      run(["--start", PERIOD.start, "--end", PERIOD.end, "--topic-id", TOPIC_ID, "--write-draft", "--confirm-reviewed", "--reviewed-by", "Joy", "--allow-mock-input"], deps)
+    ).rejects.toThrow(CmsWriteConfigError);
+    expect(createOrReplaceMock).not.toHaveBeenCalled();
+  });
+
+  it("allows a real draft write from integration-test input with --allow-integration-test-input, writes only a draft, and records the override in the receipt", async () => {
+    vi.stubEnv("PUBLIC_SANITY_PROJECT_ID", "proj123");
+    vi.stubEnv("PUBLIC_SANITY_DATASET", "production");
+    vi.stubEnv("SANITY_API_TOKEN", "sk-test-token");
+    const deps = fakeDeps({ [RUN_FILENAME]: fixtureAssetGenerationRun({ executionPurpose: "integration_test" }) });
+
+    const result = await run(
+      [
+        "--start", PERIOD.start, "--end", PERIOD.end, "--topic-id", TOPIC_ID,
+        "--write-draft", "--confirm-reviewed", "--reviewed-by", "Joy",
+        "--allow-mock-input", "--allow-integration-test-input",
+      ],
+      deps
+    );
+
+    expect(result.mode).toBe("draft-write");
+    if (result.mode !== "draft-write") throw new Error("unreachable");
+    expect(createOrReplaceMock).toHaveBeenCalledTimes(1);
+    expect(result.run.receipt?.draftDocumentId).toBe("drafts.appTool-inventory-tracker");
+    expect(result.run.provenance.sourceExecutionPurpose).toBe("integration_test");
+    expect(result.run.provenance.allowIntegrationTestInputUsed).toBe(true);
+    const sentDoc = createOrReplaceMock.mock.calls[0][0] as Record<string, unknown>;
+    expect(JSON.stringify(sentDoc).toLowerCase()).not.toContain("integrationtest");
+    expect(JSON.stringify(sentDoc).toLowerCase()).not.toContain("executionpurpose");
   });
 });

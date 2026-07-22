@@ -23,6 +23,16 @@ export interface CmsWriterProvenance {
   selectedScoredTopicId: string;
   assetBundleId: string;
   allowMockInputUsed: boolean;
+  /**
+   * The source Asset Generation run's `executionPurpose` ("business_experiment"
+   * or "integration_test"), defaulting to "business_experiment" when the
+   * source run predates this field. Optional so existing fixtures/older
+   * receipts remain structurally valid — CMS Writer always sets it
+   * explicitly on every new run it produces.
+   */
+  sourceExecutionPurpose?: string;
+  /** True only when --allow-integration-test-input was used to permit a real draft write from an integration-test source. Always false for --dry-run. */
+  allowIntegrationTestInputUsed?: boolean;
 }
 
 export interface CmsWriterReview {
@@ -103,4 +113,6 @@ export interface CmsWriteDryRunPreview {
   overrides: { allowMockInput: boolean };
   compatibility: CmsWriterCompatibility;
   confirmation: string;
+  /** "business_experiment" or "integration_test" — see CmsWriterProvenance.sourceExecutionPurpose. Always present on the dry-run preview, defaulting to "business_experiment". */
+  sourceExecutionPurpose: string;
 }

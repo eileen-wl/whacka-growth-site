@@ -127,6 +127,51 @@ function fixtureAssetGenerationRun(overrides: Partial<FinalAssetGenerationRun> =
   };
 }
 
+describe("runCmsWriter — integration-test provenance", () => {
+  it("defaults sourceExecutionPurpose to business_experiment and allowIntegrationTestInputUsed to false when unspecified", async () => {
+    const run = await runCmsWriter({
+      run: fixtureAssetGenerationRun(),
+      sourceFilename: "f.json",
+      sourceSha256: "abc123",
+      mode: "dry_run",
+      review: { reviewedBy: null, reviewNote: null },
+      allowMockInputUsed: false,
+    });
+    expect(run.provenance.sourceExecutionPurpose).toBe("business_experiment");
+    expect(run.provenance.allowIntegrationTestInputUsed).toBe(false);
+  });
+
+  it("carries executionPurpose: integration_test through into provenance, and records the override flag", async () => {
+    const run = await runCmsWriter({
+      run: fixtureAssetGenerationRun({ executionPurpose: "integration_test" }),
+      sourceFilename: "f.json",
+      sourceSha256: "abc123",
+      mode: "dry_run",
+      review: { reviewedBy: null, reviewNote: null },
+      allowMockInputUsed: false,
+      allowIntegrationTestInputUsed: true,
+    });
+    expect(run.provenance.sourceExecutionPurpose).toBe("integration_test");
+    expect(run.provenance.allowIntegrationTestInputUsed).toBe(true);
+  });
+
+  it("never includes integration-test metadata in the appTool payload itself", async () => {
+    const run = await runCmsWriter({
+      run: fixtureAssetGenerationRun({ executionPurpose: "integration_test" }),
+      sourceFilename: "f.json",
+      sourceSha256: "abc123",
+      mode: "dry_run",
+      review: { reviewedBy: null, reviewNote: null },
+      allowMockInputUsed: false,
+      allowIntegrationTestInputUsed: true,
+    });
+    const payloadKeys = Object.keys(run.cmsWriteRequest.payload);
+    expect(payloadKeys).not.toContain("executionPurpose");
+    expect(payloadKeys).not.toContain("integrationTestReview");
+    expect(JSON.stringify(run.cmsWriteRequest.payload).toLowerCase()).not.toContain("integrationtest");
+  });
+});
+
 describe("runCmsWriter — dry_run", () => {
   it("builds a FinalCmsWriterRun with mode dry_run, writeStatus not_attempted, and a null receipt", async () => {
     const run = await runCmsWriter({
@@ -277,5 +322,19 @@ describe("buildCmsWriteDryRunPreview", () => {
     expect(preview.draftDocumentId).toBe("drafts.appTool-inventory-tracker");
     expect(preview.canonicalDocumentId).toBe("appTool-inventory-tracker");
     expect(preview.confirmation.toLowerCase()).toContain("no cms write");
+    expect(preview.sourceExecutionPurpose).toBe("business_experiment");
+  });
+
+  it("surfaces sourceExecutionPurpose: integration_test on the dry-run preview when the source run was an integration test", async () => {
+    const run = await runCmsWriter({
+      run: fixtureAssetGenerationRun({ executionPurpose: "integration_test" }),
+      sourceFilename: "f.json",
+      sourceSha256: "abc123",
+      mode: "dry_run",
+      review: { reviewedBy: null, reviewNote: null },
+      allowMockInputUsed: false,
+    });
+    const preview = buildCmsWriteDryRunPreview(run, { allowMockInputUsed: false });
+    expect(preview.sourceExecutionPurpose).toBe("integration_test");
   });
 });

@@ -48,17 +48,35 @@ function languageInstruction(language: SupportedLanguage): string {
     : "Write every string value in the response in English (en).";
 }
 
-/** Combines the fixed reporting rules with the language instruction for this specific request. */
-export function buildReportingRules(language: SupportedLanguage): string[] {
-  return [...REPORTING_RULES, languageInstruction(language)];
+/**
+ * Extra rules appended only for an explicit `--integration-test` engineering
+ * run (see growth/scripts/generate-assets.ts). The response schema and
+ * content requirements are unchanged — this only tightens the model's
+ * claims about validation/approval, since an integration test is never a
+ * business-approved experiment.
+ */
+function integrationTestRules(integrationTest: boolean): string[] {
+  if (!integrationTest) return [];
+  return [
+    "This specific request is an explicit engineering integration test — you are generating a draft AssetBundle only to validate the generation -> human review -> CMS Writer pipeline end-to-end, not to launch or support a business-approved growth experiment.",
+    "You must not claim that demand has been validated, that this topic has been approved for a real experiment, or that results are proven.",
+    'You must avoid the phrases "proven demand", "validated opportunity", "top-performing market", and "confirmed user need" (and close paraphrases of them) anywhere in the response.',
+    "You must still produce the complete, coherent AssetBundle content exactly as you would for a normal request — full app copy and appPrompt, SEO title, meta description, primary and secondary keywords, FAQ, social copy for any requested channels, and CTA labels — so the pipeline can be tested end-to-end.",
+    "You must preserve every limitation and assumption already present in the supplied ScoredTopic assessment rather than smoothing them over.",
+  ];
 }
 
-export function buildSystemPrompt(language: SupportedLanguage): string {
+/** Combines the fixed reporting rules with the integration-test rules (if any) and the language instruction for this specific request. */
+export function buildReportingRules(language: SupportedLanguage, integrationTest: boolean = false): string[] {
+  return [...REPORTING_RULES, ...integrationTestRules(integrationTest), languageInstruction(language)];
+}
+
+export function buildSystemPrompt(language: SupportedLanguage, integrationTest: boolean = false): string {
   return [
     "You are an evidence-grounded growth asset designer producing one AssetBundle's worth of content for an internal growth loop.",
     "You may only use the selected TopicCandidate, the selected ScoredTopic assessment, the supplied existing-app catalog, and the supplied constraints.",
     "",
-    ...buildReportingRules(language).map((rule) => `- ${rule}`),
+    ...buildReportingRules(language, integrationTest).map((rule) => `- ${rule}`),
     "",
     "This Agent designs content only. IDs, URLs, UTM values, status, and validation are computed deterministically afterward, and a human reviews the result before CMS Writer creates a Sanity draft.",
   ].join("\n");
@@ -133,13 +151,16 @@ export interface BuildAssetGenerationLLMRequestParams {
   allowedCtaTypes: string[];
   requestedSocialChannels: string[];
   maxTokens: number;
+  /** True only for an explicit `--integration-test` engineering run. Defaults to false — normal requests are unaffected. */
+  integrationTest?: boolean;
 }
 
 /** Builds the full, ready-to-send request: rendered system/user prompt strings plus the structured content they came from. */
 export function buildAssetGenerationLLMRequest(params: BuildAssetGenerationLLMRequestParams): AssetGenerationLLMRequest {
-  const reportingRules = buildReportingRules(params.language);
+  const integrationTest = params.integrationTest ?? false;
+  const reportingRules = buildReportingRules(params.language, integrationTest);
 
-  const systemPrompt = buildSystemPrompt(params.language);
+  const systemPrompt = buildSystemPrompt(params.language, integrationTest);
   const userPrompt = buildUserPrompt({
     purpose: ASSET_GENERATION_PURPOSE,
     period: params.period,

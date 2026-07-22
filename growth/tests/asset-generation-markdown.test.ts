@@ -221,4 +221,25 @@ describe("renderAssetGenerationMarkdown", () => {
     bundle.validation.warnings = [];
     expect(() => renderAssetGenerationMarkdown(fixtureRun({ assetBundle: bundle }))).not.toThrow();
   });
+
+  it("shows a prominent integration-test banner with source recommendation and reviewer, and never claims business approval", () => {
+    const md = renderAssetGenerationMarkdown(
+      fixtureRun({
+        executionPurpose: "integration_test",
+        integrationTestReview: { confirmed: true, reviewedBy: "Joy", reviewNote: "Engineering check only.", sourceRecommendation: "hold", businessApprovalGranted: false },
+      })
+    );
+    expect(md).toContain("ENGINEERING INTEGRATION TEST");
+    expect(md).toContain("**hold**");
+    expect(md).toContain("Joy");
+    expect(md).toContain("Engineering check only.");
+    expect(md).toContain("Business approval: **not granted**");
+    expect(md).toContain(`- **Execution purpose:** integration_test`);
+  });
+
+  it("does not show the integration-test banner for a normal business_experiment run", () => {
+    const md = renderAssetGenerationMarkdown(fixtureRun());
+    expect(md).not.toContain("ENGINEERING INTEGRATION TEST");
+    expect(md).toContain(`- **Execution purpose:** business_experiment`);
+  });
 });

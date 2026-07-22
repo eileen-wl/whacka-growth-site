@@ -62,6 +62,15 @@ export interface CollectArgs {
   allowMockInput: boolean;
   allowUnapprovedTopic: boolean;
   allowHoldTopic: boolean;
+  /**
+   * Explicit engineering integration-test override — see
+   * "Integration-test mode" in growth/README.md. Never implied by any other
+   * flag; never a substitute for business approval.
+   */
+  integrationTest: boolean;
+  confirmIntegrationTest: boolean;
+  reviewedBy?: string;
+  reviewNote?: string;
 }
 
 export function parseSocialChannels(raw: string | undefined): string[] {
@@ -82,6 +91,8 @@ export function parseArgs(argv: string[]): CollectArgs {
     allowMockInput: false,
     allowUnapprovedTopic: false,
     allowHoldTopic: false,
+    integrationTest: false,
+    confirmIntegrationTest: false,
   };
 
   for (let i = 0; i < argv.length; i++) {
@@ -114,6 +125,14 @@ export function parseArgs(argv: string[]): CollectArgs {
       args.allowUnapprovedTopic = true;
     } else if (arg === "--allow-hold-topic") {
       args.allowHoldTopic = true;
+    } else if (arg === "--integration-test") {
+      args.integrationTest = true;
+    } else if (arg === "--confirm-integration-test") {
+      args.confirmIntegrationTest = true;
+    } else if (arg === "--reviewed-by") {
+      args.reviewedBy = argv[++i];
+    } else if (arg === "--review-note") {
+      args.reviewNote = argv[++i];
     } else {
       throw new Error(`Unrecognized argument "${arg}".`);
     }
@@ -130,6 +149,21 @@ export function parseArgs(argv: string[]): CollectArgs {
   }
   if (!args.topicId) {
     throw new Error("growth:generate-assets requires --topic-id — an explicit topic must always be selected; there is no automatic rank-1/top-topic selection.");
+  }
+  if (args.confirmIntegrationTest && !args.integrationTest) {
+    throw new Error("--confirm-integration-test requires --integration-test — it is not a standalone flag.");
+  }
+  if (args.integrationTest && !args.confirmIntegrationTest) {
+    throw new Error("--integration-test requires --confirm-integration-test — an explicit confirmation that this is an engineering integration test, not a business experiment.");
+  }
+  if (args.integrationTest && (!args.reviewedBy || args.reviewedBy.trim().length === 0)) {
+    throw new Error("--integration-test requires --reviewed-by <name> — a non-empty reviewer name.");
+  }
+  if (args.integrationTest && args.dryRun) {
+    throw new Error(
+      "--integration-test cannot be combined with --dry-run — --dry-run never calls a provider, so there is nothing to integration-test. " +
+        "Use --provider mock to preview locally, or drop --dry-run for the real Anthropic integration test."
+    );
   }
 
   return args;
@@ -377,19 +411,64 @@ export function assertLiveUnapprovedTopicAllowed(run: FinalTopicScoringRun, allo
 /**
  * A `hold` topic is rejected by default in every mode. Mock/dry-run may
  * proceed only with `--allow-hold-topic` (engineering validation); live
- * Anthropic generation for a `hold` topic remains rejected in v1 no matter
- * what flags are passed.
+ * Anthropic generation for a `hold` topic remains rejected — the ONLY way
+ * past this is a fully-validated `integrationTestOverride` (see
+ * `resolveIntegrationTestGate`, called by `run()` before this), which
+ * requires --integration-test, --confirm-integration-test, --reviewed-by,
+ * and --allow-hold-topic all together. There is no other override, and this
+ * never changes the source topic's recommendation or approves a business
+ * experiment.
  */
-export function assertHoldTopicAllowed(recommendation: string, mode: "dry-run" | "mock" | "anthropic", allowHoldTopic: boolean): void {
+export function assertHoldTopicAllowed(
+  recommendation: string,
+  mode: "dry-run" | "mock" | "anthropic",
+  allowHoldTopic: boolean,
+  integrationTestOverride: boolean = false
+): void {
   if (recommendation !== "hold") return;
   if (mode === "anthropic") {
-    throw new AssetGenerationConfigError("Selected topic's recommendation is \"hold\". Live Anthropic generation for a 'hold' topic is not supported in v1 — select a different topic.");
+    if (integrationTestOverride) return;
+    throw new AssetGenerationConfigError(
+      "Selected topic's recommendation is \"hold\". Live Anthropic generation for a 'hold' topic is not supported by default — select a different " +
+        "topic, or use the explicit --integration-test engineering override (requires --integration-test, --confirm-integration-test, " +
+        "--reviewed-by <name>, and --allow-hold-topic together — see growth/README.md)."
+    );
   }
   if (!allowHoldTopic) {
     throw new AssetGenerationConfigError(
       `Selected topic's recommendation is "hold". Pass --allow-hold-topic to generate from it anyway (engineering validation only).`
     );
   }
+}
+
+/**
+ * Resolves whether an explicit, fully-validated integration-test override is
+ * in effect for THIS request. `parseArgs` already enforces
+ * --confirm-integration-test/--reviewed-by/--dry-run-exclusivity as soon as
+ * --integration-test is present, so by the time this runs `args.integrationTest`
+ * guarantees `args.reviewedBy` is a non-empty string — this re-checks
+ * defensively rather than trusting that invariant blindly. Returns
+ * `active: false` when --integration-test was not passed at all. This is the
+ * ONLY function that can ever produce a hold-topic override for live
+ * Anthropic generation — there is no --force, no --skip-validation.
+ */
+export interface IntegrationTestGate {
+  active: boolean;
+  reviewedBy: string | null;
+  reviewNote: string | null;
+}
+
+export function resolveIntegrationTestGate(args: CollectArgs): IntegrationTestGate {
+  if (!args.integrationTest) {
+    return { active: false, reviewedBy: null, reviewNote: null };
+  }
+  if (!args.confirmIntegrationTest) {
+    throw new AssetGenerationConfigError("--integration-test requires --confirm-integration-test.");
+  }
+  if (!args.reviewedBy || args.reviewedBy.trim().length === 0) {
+    throw new AssetGenerationConfigError("--integration-test requires --reviewed-by <name>.");
+  }
+  return { active: true, reviewedBy: args.reviewedBy, reviewNote: args.reviewNote ?? null };
 }
 
 // ---------------------------------------------------------------------------
@@ -409,8 +488,18 @@ export function resolvePreviewPath(period: DateRange, topicId: string, overwrite
   return resolveNamedSnapshotPath(PROCESSED_DATA_DIR, `asset-generation-request-${period.start}_to_${period.end}-${topicId}`, overwrite, exists, now);
 }
 
-export function resolveRunJsonPath(period: DateRange, topicId: string, overwrite: boolean, exists?: (path: string) => boolean, now?: Date): string {
-  return resolveNamedSnapshotPath(ASSETS_DIR, `asset-generation-${period.start}_to_${period.end}-${topicId}`, overwrite, exists, now);
+/**
+ * `integrationTest: true` inserts a visible `.integration-test` segment
+ * before `.json` (`asset-generation-{start}_to_{end}-{topicId}.integration-test.json`),
+ * so an integration-test output can never be confused for a normal business
+ * asset by filename alone. Collision behavior (timestamp suffix) and
+ * `--overwrite` work exactly as for a normal run — the suffix is just part
+ * of the base name passed to the same collision-safe resolver. Normal
+ * (non-integration-test) filenames are completely unchanged.
+ */
+export function resolveRunJsonPath(period: DateRange, topicId: string, overwrite: boolean, exists?: (path: string) => boolean, now?: Date, integrationTest: boolean = false): string {
+  const suffix = integrationTest ? ".integration-test" : "";
+  return resolveNamedSnapshotPath(ASSETS_DIR, `asset-generation-${period.start}_to_${period.end}-${topicId}${suffix}`, overwrite, exists, now);
 }
 
 // ---------------------------------------------------------------------------
@@ -529,7 +618,10 @@ export async function run(argv: string[], deps: FileSystemDeps = defaultDeps): P
 
   const provider = resolveProvider(args, env);
   const mode = provider.name === "anthropic" ? "anthropic" : "mock";
-  assertHoldTopicAllowed(scoredTopic.recommendation, mode, args.allowHoldTopic);
+
+  const integrationTestGate = resolveIntegrationTestGate(args);
+  const integrationTestHoldOverride = integrationTestGate.active && args.allowHoldTopic;
+  assertHoldTopicAllowed(scoredTopic.recommendation, mode, args.allowHoldTopic, integrationTestHoldOverride);
 
   if (provider.name === "anthropic") {
     assertLiveMockInputAllowed(topicScoringRun, filename, args.allowMockInput);
@@ -549,9 +641,10 @@ export async function run(argv: string[], deps: FileSystemDeps = defaultDeps): P
     allowMockInputUsed: args.allowMockInput,
     allowUnapprovedTopicUsed: args.allowUnapprovedTopic,
     allowHoldTopicUsed: args.allowHoldTopic,
+    integrationTest: integrationTestGate.active ? { reviewedBy: integrationTestGate.reviewedBy as string, reviewNote: integrationTestGate.reviewNote } : undefined,
   });
 
-  const jsonPath = resolveRunJsonPath(period, topicId, args.overwrite, deps.exists);
+  const jsonPath = resolveRunJsonPath(period, topicId, args.overwrite, deps.exists, undefined, integrationTestGate.active);
   const markdownPath = jsonPath.replace(/\.json$/, ".md");
 
   writeFileAtomic(jsonPath, `${JSON.stringify(assetGenerationRun, null, 2)}\n`);
@@ -586,6 +679,14 @@ async function main(): Promise<void> {
     }
 
     const { run: finalRun } = result;
+    if (finalRun.executionPurpose === "integration_test") {
+      console.log("[growth:generate-assets] *** ENGINEERING INTEGRATION TEST — NOT a business-approved growth experiment ***");
+      console.log(`[growth:generate-assets] Source topic recommendation: ${finalRun.integrationTestReview?.sourceRecommendation ?? "unknown"}`);
+      console.log(`[growth:generate-assets] Reviewed by: ${finalRun.integrationTestReview?.reviewedBy ?? "unknown"}`);
+      if (finalRun.integrationTestReview?.reviewNote) {
+        console.log(`[growth:generate-assets] Review note: ${finalRun.integrationTestReview.reviewNote}`);
+      }
+    }
     console.log(`[growth:generate-assets] Selected Topic Scoring run: ${finalRun.provenance.sourceTopicScoringFilename}`);
     console.log(`[growth:generate-assets] Provider: ${finalRun.generation.provider}${finalRun.generation.isMock ? " (mock)" : ""}`);
     console.log(`[growth:generate-assets] Model: ${finalRun.generation.model}`);

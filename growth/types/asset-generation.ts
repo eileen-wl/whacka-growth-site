@@ -271,6 +271,33 @@ export interface AssetGenerationHumanReview {
   note: string;
 }
 
+/**
+ * "business_experiment" (the default for every normal run) is a candidate
+ * for a real, business-approved growth experiment. "integration_test" marks
+ * a run produced under the explicit `--integration-test` engineering
+ * override (see growth/scripts/generate-assets.ts) — it exists only to
+ * validate the Asset Generation -> human review -> CMS Writer pipeline
+ * end-to-end and is never itself an approved experiment, regardless of the
+ * source topic's recommendation.
+ */
+export type AssetGenerationExecutionPurpose = "business_experiment" | "integration_test";
+
+/**
+ * Present (non-null) only when `executionPurpose === "integration_test"`.
+ * `sourceRecommendation` records the ACTUAL recommendation of the topic this
+ * run was generated from (e.g. "hold") — never overridden or mutated.
+ * `businessApprovalGranted` is always the literal `false`: no code path in
+ * this contract can ever set it to `true`. An integration test is never
+ * itself the business decision to run an experiment.
+ */
+export interface AssetGenerationIntegrationTestReview {
+  confirmed: true;
+  reviewedBy: string;
+  reviewNote: string | null;
+  sourceRecommendation: string;
+  businessApprovalGranted: false;
+}
+
 export interface AssetGenerationDataQuality {
   overallStatus: "complete" | "partial" | "invalid";
   warnings: string[];
@@ -292,6 +319,16 @@ export interface FinalAssetGenerationRun {
   compatibility: AssetGenerationCompatibility;
   humanReview: AssetGenerationHumanReview;
   dataQuality: AssetGenerationDataQuality;
+  /**
+   * Optional so old on-disk runs (written before this field existed) remain
+   * a structurally valid FinalAssetGenerationRun. Every run this Agent
+   * produces going forward always sets it explicitly — absence is only ever
+   * a property of historical files, never of new code's own output. A
+   * missing/absent value must always be treated as "business_experiment".
+   */
+  executionPurpose?: AssetGenerationExecutionPurpose;
+  /** Always explicitly `null` for a "business_experiment" run, never omitted, once this field is set at all. */
+  integrationTestReview?: AssetGenerationIntegrationTestReview | null;
 }
 
 /** The on-disk shape written to growth/data/processed/asset-generation-request-{start}_to_{end}-{topic-id}.json in --dry-run mode. Never includes secrets. */

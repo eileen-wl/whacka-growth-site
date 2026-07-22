@@ -15,6 +15,7 @@ import {
   parseArgs,
   parseSocialChannels,
   readProviderEnv,
+  resolveIntegrationTestGate,
   resolvePreviewPath,
   resolveProvider,
   resolveRunJsonPath,
@@ -162,6 +163,8 @@ describe("parseArgs", () => {
       allowMockInput: false,
       allowUnapprovedTopic: false,
       allowHoldTopic: false,
+      integrationTest: false,
+      confirmIntegrationTest: false,
     });
   });
 
@@ -185,11 +188,85 @@ describe("parseArgs", () => {
       allowMockInput: true,
       allowUnapprovedTopic: true,
       allowHoldTopic: true,
+      integrationTest: false,
+      confirmIntegrationTest: false,
     });
   });
 
   it("rejects unrecognized arguments", () => {
     expect(() => parseArgs(["--start", "2026-07-08", "--end", "2026-07-14", "--topic-id", "topic_abc", "--bogus"])).toThrow(/Unrecognized argument/);
+  });
+});
+
+describe("parseArgs — integration-test flags", () => {
+  const baseArgv = ["--start", "2026-07-08", "--end", "2026-07-14", "--topic-id", "topic_abc"];
+
+  it("parses a fully-specified integration-test invocation", () => {
+    const args = parseArgs([...baseArgv, "--provider", "anthropic", "--integration-test", "--confirm-integration-test", "--reviewed-by", "Joy", "--review-note", "Engineering check only.", "--allow-hold-topic", "--allow-unapproved-topic"]);
+    expect(args.integrationTest).toBe(true);
+    expect(args.confirmIntegrationTest).toBe(true);
+    expect(args.reviewedBy).toBe("Joy");
+    expect(args.reviewNote).toBe("Engineering check only.");
+  });
+
+  it("rejects --integration-test without --confirm-integration-test", () => {
+    expect(() => parseArgs([...baseArgv, "--integration-test", "--reviewed-by", "Joy"])).toThrow(/--confirm-integration-test/);
+  });
+
+  it("rejects --confirm-integration-test without --integration-test", () => {
+    expect(() => parseArgs([...baseArgv, "--confirm-integration-test"])).toThrow(/--integration-test/);
+  });
+
+  it("rejects --integration-test without --reviewed-by", () => {
+    expect(() => parseArgs([...baseArgv, "--integration-test", "--confirm-integration-test"])).toThrow(/--reviewed-by/);
+  });
+
+  it("rejects --integration-test with a whitespace-only --reviewed-by", () => {
+    expect(() => parseArgs([...baseArgv, "--integration-test", "--confirm-integration-test", "--reviewed-by", "   "])).toThrow(/--reviewed-by/);
+  });
+
+  it("rejects --integration-test combined with --dry-run", () => {
+    expect(() => parseArgs([...baseArgv, "--integration-test", "--confirm-integration-test", "--reviewed-by", "Joy", "--dry-run"])).toThrow(/--dry-run/);
+  });
+
+  it("does not implement a general --force, --skip-validation, --publish, or --approve-topic flag", () => {
+    for (const bogus of ["--force", "--skip-validation", "--publish", "--approve-topic"]) {
+      expect(() => parseArgs([...baseArgv, bogus])).toThrow(/Unrecognized argument/);
+    }
+  });
+});
+
+describe("resolveIntegrationTestGate", () => {
+  const baseArgs = {
+    language: "en" as const,
+    socialChannels: [] as string[],
+    overwrite: false,
+    dryRun: false,
+    allowMockInput: false,
+    allowUnapprovedTopic: false,
+    allowHoldTopic: false,
+    integrationTest: false,
+    confirmIntegrationTest: false,
+    topicId: "topic_abc",
+  };
+
+  it("is inactive when --integration-test was not passed", () => {
+    expect(resolveIntegrationTestGate(baseArgs)).toEqual({ active: false, reviewedBy: null, reviewNote: null });
+  });
+
+  it("is active with reviewedBy/reviewNote when fully specified", () => {
+    const gate = resolveIntegrationTestGate({ ...baseArgs, integrationTest: true, confirmIntegrationTest: true, reviewedBy: "Joy", reviewNote: "Note." });
+    expect(gate).toEqual({ active: true, reviewedBy: "Joy", reviewNote: "Note." });
+  });
+
+  it("defaults reviewNote to null when not supplied", () => {
+    const gate = resolveIntegrationTestGate({ ...baseArgs, integrationTest: true, confirmIntegrationTest: true, reviewedBy: "Joy" });
+    expect(gate.reviewNote).toBeNull();
+  });
+
+  it("throws defensively if integrationTest is true but confirmIntegrationTest/reviewedBy are missing (parseArgs should already prevent this)", () => {
+    expect(() => resolveIntegrationTestGate({ ...baseArgs, integrationTest: true })).toThrow(AssetGenerationConfigError);
+    expect(() => resolveIntegrationTestGate({ ...baseArgs, integrationTest: true, confirmIntegrationTest: true })).toThrow(AssetGenerationConfigError);
   });
 });
 
@@ -228,7 +305,7 @@ describe("readProviderEnv", () => {
 
 describe("resolveProvider — fallback chain", () => {
   const baseEnv = { provider: undefined, model: undefined, maxTokens: 10000, promptVersion: "1.0.0", apiKey: undefined, growthReportProvider: undefined, growthReportModel: undefined };
-  const baseArgs = { language: "en" as const, socialChannels: [] as string[], overwrite: false, dryRun: false, allowMockInput: false, allowUnapprovedTopic: false, allowHoldTopic: false, topicId: "topic_abc" };
+  const baseArgs = { language: "en" as const, socialChannels: [] as string[], overwrite: false, dryRun: false, allowMockInput: false, allowUnapprovedTopic: false, allowHoldTopic: false, integrationTest: false, confirmIntegrationTest: false, topicId: "topic_abc" };
 
   it("throws AssetGenerationConfigError when nothing is configured", () => {
     expect(() => resolveProvider(baseArgs, baseEnv)).toThrow(AssetGenerationConfigError);
@@ -260,7 +337,7 @@ describe("resolveProvider — fallback chain", () => {
 });
 
 describe("loadTopicScoringRun", () => {
-  const args = { language: "en" as const, socialChannels: [] as string[], overwrite: false, dryRun: false, allowMockInput: false, allowUnapprovedTopic: false, allowHoldTopic: false, topicId: "topic_abc" };
+  const args = { language: "en" as const, socialChannels: [] as string[], overwrite: false, dryRun: false, allowMockInput: false, allowUnapprovedTopic: false, allowHoldTopic: false, integrationTest: false, confirmIntegrationTest: false, topicId: "topic_abc" };
 
   it("loads a valid discovered Topic Scoring run", () => {
     const deps = fakeDeps({ "topic-scoring-2026-07-08_to_2026-07-14.json": fixtureTopicScoringRun() });
@@ -332,9 +409,24 @@ describe("assertLiveMockInputAllowed / assertLiveUnapprovedTopicAllowed / assert
     expect(() => assertHoldTopicAllowed("hold", "dry-run", true)).not.toThrow();
   });
 
-  it("assertHoldTopicAllowed always rejects hold for live anthropic, even with the override", () => {
+  it("assertHoldTopicAllowed always rejects hold for live anthropic without the integration-test override, even with --allow-hold-topic", () => {
     expect(() => assertHoldTopicAllowed("hold", "anthropic", true)).toThrow(AssetGenerationConfigError);
     expect(() => assertHoldTopicAllowed("hold", "anthropic", false)).toThrow(AssetGenerationConfigError);
+  });
+
+  it("assertHoldTopicAllowed accepts hold for live anthropic ONLY with the explicit integration-test override", () => {
+    expect(() => assertHoldTopicAllowed("hold", "anthropic", true, true)).not.toThrow();
+  });
+
+  it("assertHoldTopicAllowed still rejects hold for live anthropic if integrationTestOverride is true but the caller lied about allowHoldTopic being needed too — override alone never substitutes for the flag bundle", () => {
+    // The real caller (run()) only ever passes integrationTestOverride = (gate.active && args.allowHoldTopic),
+    // so this exercises the function's own contract in isolation: integrationTestOverride is a pass/fail signal computed by the caller, not re-derived here.
+    expect(() => assertHoldTopicAllowed("hold", "anthropic", false, false)).toThrow(AssetGenerationConfigError);
+  });
+
+  it("the integration-test override never applies outside live anthropic mode — mock/dry-run still require --allow-hold-topic on its own", () => {
+    expect(() => assertHoldTopicAllowed("hold", "mock", false, true)).toThrow(AssetGenerationConfigError);
+    expect(() => assertHoldTopicAllowed("hold", "dry-run", false, true)).toThrow(AssetGenerationConfigError);
   });
 });
 
@@ -355,6 +447,24 @@ describe("resolvePreviewPath / resolveRunJsonPath — collision-safe, topic-id-s
   it("reuses the base filename with --overwrite", () => {
     const path = resolveRunJsonPath(PERIOD, "topic_abc", true, () => true);
     expect(path.replace(/\\/g, "/")).toMatch(/asset-generation-2026-07-08_to_2026-07-14-topic_abc\.json$/);
+  });
+
+  it("inserts a visible .integration-test segment when integrationTest is true, leaving normal filenames untouched", () => {
+    const normalPath = resolveRunJsonPath(PERIOD, "topic_abc", false, () => false);
+    expect(normalPath.replace(/\\/g, "/")).toMatch(/asset-generation-2026-07-08_to_2026-07-14-topic_abc\.json$/);
+
+    const integrationTestPath = resolveRunJsonPath(PERIOD, "topic_abc", false, () => false, undefined, true);
+    expect(integrationTestPath.replace(/\\/g, "/")).toMatch(/asset-generation-2026-07-08_to_2026-07-14-topic_abc\.integration-test\.json$/);
+  });
+
+  it("still applies collision-safe timestamping and --overwrite to integration-test filenames", () => {
+    const now = new Date("2026-07-16T00:00:00.000Z");
+    const collidedPath = resolveRunJsonPath(PERIOD, "topic_abc", false, () => true, now, true);
+    expect(collidedPath.replace(/\\/g, "/")).not.toMatch(/\.integration-test\.json$/);
+    expect(collidedPath.replace(/\\/g, "/")).toMatch(/\.integration-test\.2026-07-16T00-00-00-000Z\.json$/);
+
+    const overwritePath = resolveRunJsonPath(PERIOD, "topic_abc", true, () => true, now, true);
+    expect(overwritePath.replace(/\\/g, "/")).toMatch(/asset-generation-2026-07-08_to_2026-07-14-topic_abc\.integration-test\.json$/);
   });
 });
 
@@ -465,5 +575,110 @@ describe("run — mock provider mode", () => {
     if (result.mode === "assets") {
       expect(result.run.assetBundle.social.posts.map((p) => p.channel)).toEqual(["linkedin"]);
     }
+  });
+});
+
+describe("run — integration-test mode (offline via Mock Provider)", () => {
+  const INTEGRATION_TEST_FLAGS = ["--integration-test", "--confirm-integration-test", "--reviewed-by", "Joy", "--review-note", "Engineering integration test only."];
+
+  it("produces executionPurpose: integration_test with full metadata, forced needs_review, and a suffixed filename", async () => {
+    const deps = fakeDeps({ "topic-scoring-2026-07-08_to_2026-07-14.json": fixtureHoldRun() });
+    const result = await run(
+      ["--start", PERIOD.start, "--end", PERIOD.end, "--topic-id", "topic_abc", "--provider", "mock", "--allow-hold-topic", "--allow-unapproved-topic", ...INTEGRATION_TEST_FLAGS],
+      deps
+    );
+    expect(result.mode).toBe("assets");
+    if (result.mode !== "assets") return;
+
+    expect(result.run.executionPurpose).toBe("integration_test");
+    expect(result.run.integrationTestReview).toEqual({
+      confirmed: true,
+      reviewedBy: "Joy",
+      reviewNote: "Engineering integration test only.",
+      sourceRecommendation: "hold",
+      businessApprovalGranted: false,
+    });
+    expect(result.run.assetBundle.validation.status).toBe("needs_review");
+    expect(result.run.humanReview.required).toBe(true);
+    expect(result.run.humanReview.approved).toBe(false);
+    expect(result.run.compatibility.cmsWritePerformed).toBe(false);
+    expect(result.run.compatibility.siteModified).toBe(false);
+    expect(result.run.compatibility.seoPersistenceAvailable).toBe(true);
+    expect(result.jsonPath.replace(/\\/g, "/")).toMatch(/asset-generation-2026-07-08_to_2026-07-14-topic_abc\.integration-test\.json$/);
+    expect(result.markdownPath.replace(/\\/g, "/")).toMatch(/asset-generation-2026-07-08_to_2026-07-14-topic_abc\.integration-test\.md$/);
+  });
+
+  it("records the four required integration-test warnings on the AssetBundle", async () => {
+    const deps = fakeDeps({ "topic-scoring-2026-07-08_to_2026-07-14.json": fixtureHoldRun() });
+    const result = await run(
+      ["--start", PERIOD.start, "--end", PERIOD.end, "--topic-id", "topic_abc", "--provider", "mock", "--allow-hold-topic", "--allow-unapproved-topic", ...INTEGRATION_TEST_FLAGS],
+      deps
+    );
+    if (result.mode !== "assets") throw new Error("unreachable");
+    expect(result.run.assetBundle.validation.warnings).toEqual(
+      expect.arrayContaining([
+        "Generated under explicit engineering integration-test override.",
+        'Source topic recommendation is "hold".',
+        "This output is not approved as a business experiment.",
+        "Human content review is required before any CMS draft write.",
+      ])
+    );
+  });
+
+  it("does not mutate the source ScoredTopic's recommendation or blockers", async () => {
+    const deps = fakeDeps({ "topic-scoring-2026-07-08_to_2026-07-14.json": fixtureHoldRun() });
+    const result = await run(
+      ["--start", PERIOD.start, "--end", PERIOD.end, "--topic-id", "topic_abc", "--provider", "mock", "--allow-hold-topic", "--allow-unapproved-topic", ...INTEGRATION_TEST_FLAGS],
+      deps
+    );
+    if (result.mode !== "assets") throw new Error("unreachable");
+    expect(result.run.selectedScoredTopic.recommendation).toBe("hold");
+    expect(result.run.selectedScoredTopic.blockers).toEqual(["insufficient_evidence: not enough signal"]);
+  });
+
+  it("normal (non-integration-test) runs still resolve executionPurpose to business_experiment", async () => {
+    const deps = fakeDeps({ "topic-scoring-2026-07-08_to_2026-07-14.json": fixtureTopicScoringRun() });
+    const result = await run(["--start", PERIOD.start, "--end", PERIOD.end, "--topic-id", "topic_abc", "--provider", "mock"], deps);
+    if (result.mode !== "assets") throw new Error("unreachable");
+    expect(result.run.executionPurpose).toBe("business_experiment");
+    expect(result.run.integrationTestReview).toBeNull();
+    expect(result.jsonPath).not.toContain("integration-test");
+  });
+
+  it("rejects a full integration-test request missing --allow-hold-topic", async () => {
+    const deps = fakeDeps({ "topic-scoring-2026-07-08_to_2026-07-14.json": fixtureHoldRun() });
+    await expect(
+      run(["--start", PERIOD.start, "--end", PERIOD.end, "--topic-id", "topic_abc", "--provider", "mock", "--allow-unapproved-topic", ...INTEGRATION_TEST_FLAGS], deps)
+    ).rejects.toThrow(AssetGenerationConfigError);
+  });
+
+  it("never lets any integration-test flag override an invalid/unknown --topic-id", async () => {
+    const deps = fakeDeps({ "topic-scoring-2026-07-08_to_2026-07-14.json": fixtureHoldRun() });
+    await expect(
+      run(
+        ["--start", PERIOD.start, "--end", PERIOD.end, "--topic-id", "topic_does_not_exist", "--provider", "mock", "--allow-hold-topic", "--allow-unapproved-topic", ...INTEGRATION_TEST_FLAGS],
+        deps
+      )
+    ).rejects.toThrow(AssetGenerationInputError);
+  });
+
+  it("never lets integration-test flags override an unsupported Topic Scoring schema version", async () => {
+    const deps = fakeDeps({ "topic-scoring-2026-07-08_to_2026-07-14.json": { ...fixtureHoldRun(), schemaVersion: "2.0.0" } });
+    await expect(
+      run(["--start", PERIOD.start, "--end", PERIOD.end, "--topic-id", "topic_abc", "--provider", "mock", "--allow-hold-topic", "--allow-unapproved-topic", ...INTEGRATION_TEST_FLAGS], deps)
+    ).rejects.toThrow(AssetGenerationInputError);
+  });
+
+  it("no secret or absolute local path ever appears in an integration-test run", async () => {
+    const deps = fakeDeps({ "topic-scoring-2026-07-08_to_2026-07-14.json": fixtureHoldRun() });
+    const result = await run(
+      ["--start", PERIOD.start, "--end", PERIOD.end, "--topic-id", "topic_abc", "--provider", "mock", "--allow-hold-topic", "--allow-unapproved-topic", ...INTEGRATION_TEST_FLAGS],
+      deps
+    );
+    if (result.mode !== "assets") throw new Error("unreachable");
+    const serialized = JSON.stringify(result.run).toLowerCase();
+    expect(serialized).not.toContain("sk-ant");
+    expect(serialized).not.toContain("bearer");
+    expect(serialized).not.toContain(":\\users\\");
   });
 });

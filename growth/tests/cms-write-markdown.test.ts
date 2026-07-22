@@ -178,4 +178,18 @@ describe("renderCmsWriteMarkdown", () => {
   it("does not throw for a run with no warnings and no receipt", () => {
     expect(() => renderCmsWriteMarkdown(fixtureRun())).not.toThrow();
   });
+
+  it("shows a prominent integration-test banner when the source run was an integration test", () => {
+    const run = fixtureRun({ provenance: { ...fixtureRun().provenance, sourceExecutionPurpose: "integration_test", allowIntegrationTestInputUsed: true } });
+    const md = renderCmsWriteMarkdown(run);
+    expect(md).toContain("ENGINEERING INTEGRATION TEST");
+    expect(md).toContain("--allow-integration-test-input");
+    expect(md).toContain("- **Execution purpose:** integration_test");
+  });
+
+  it("does not show the integration-test banner for a normal business_experiment run", () => {
+    const md = renderCmsWriteMarkdown(fixtureRun());
+    expect(md).not.toContain("ENGINEERING INTEGRATION TEST");
+    expect(md).toContain("- **Execution purpose:** business_experiment");
+  });
 });

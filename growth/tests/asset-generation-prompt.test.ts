@@ -74,6 +74,35 @@ describe("buildReportingRules / buildSystemPrompt", () => {
   it("system prompt identifies the model as a growth asset designer", () => {
     expect(buildSystemPrompt("en")).toContain("growth asset designer");
   });
+
+  it("omits integration-test rules by default", () => {
+    const rules = buildReportingRules("en");
+    expect(rules.some((r) => r.toLowerCase().includes("integration test"))).toBe(false);
+  });
+
+  it("adds integration-test rules — engineering purpose, no validated-demand claims, banned phrases, still complete content — when integrationTest is true, without dropping the language instruction as the last rule", () => {
+    const rules = buildReportingRules("en", true);
+    const joined = rules.join(" ").toLowerCase();
+    expect(joined).toContain("engineering integration test");
+    expect(joined).toContain("must not claim that demand has been validated");
+    expect(joined).toContain("proven demand");
+    expect(joined).toContain("validated opportunity");
+    expect(joined).toContain("top-performing market");
+    expect(joined).toContain("confirmed user need");
+    expect(joined).toContain("full app copy and appprompt");
+    expect(joined).toContain("preserve every limitation");
+    expect(rules.at(-1)).toContain("English (en)");
+  });
+
+  it("threads integrationTest into the rendered system prompt", () => {
+    const prompt = buildSystemPrompt("en", true);
+    expect(prompt.toLowerCase()).toContain("engineering integration test");
+    expect(prompt.toLowerCase()).toContain("proven demand");
+  });
+
+  it("does not add integration-test rules to the system prompt by default", () => {
+    expect(buildSystemPrompt("en").toLowerCase()).not.toContain("engineering integration test");
+  });
 });
 
 describe("buildUserPrompt", () => {
@@ -165,5 +194,35 @@ describe("buildAssetGenerationLLMRequest", () => {
       maxTokens: 10000,
     });
     expect(request.reportingRules.at(-1)).toContain("Simplified Chinese");
+  });
+
+  it("threads integrationTest: true into both the system prompt and reportingRules, and still requests the full response schema", () => {
+    const request = buildAssetGenerationLLMRequest({
+      campaign: CAMPAIGN,
+      period: PERIOD,
+      language: "en",
+      context: fixtureContext({ recommendation: "hold" }),
+      allowedCtaTypes: ["view_demo", "remix", "build", "copy_prompt"],
+      requestedSocialChannels: [],
+      maxTokens: 10000,
+      integrationTest: true,
+    });
+    expect(request.systemPrompt.toLowerCase()).toContain("engineering integration test");
+    expect(request.reportingRules.some((r) => r.toLowerCase().includes("proven demand"))).toBe(true);
+    expect(request.responseSchemaDescription).toContain("appConcept");
+    expect(request.responseSchemaDescription).toContain("seo");
+  });
+
+  it("defaults integrationTest to false when omitted", () => {
+    const request = buildAssetGenerationLLMRequest({
+      campaign: CAMPAIGN,
+      period: PERIOD,
+      language: "en",
+      context: fixtureContext(),
+      allowedCtaTypes: ["view_demo", "remix", "build", "copy_prompt"],
+      requestedSocialChannels: [],
+      maxTokens: 10000,
+    });
+    expect(request.systemPrompt.toLowerCase()).not.toContain("engineering integration test");
   });
 });

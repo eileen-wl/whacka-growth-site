@@ -48,6 +48,8 @@ export interface RunCmsWriterParams {
   dataset?: string | null;
   review: { reviewedBy: string | null; reviewNote: string | null };
   allowMockInputUsed: boolean;
+  /** True only when --allow-integration-test-input was supplied — recorded in the receipt/preview, never used to bypass any other gate here (the caller script enforces the actual rejection). */
+  allowIntegrationTestInputUsed?: boolean;
   /** Required (and only used) when mode is "draft_write" — never constructed by this module. */
   sanityClient?: SanityWriteClient;
   projectId?: string | null;
@@ -111,6 +113,8 @@ export async function runCmsWriter(params: RunCmsWriterParams): Promise<FinalCms
       selectedScoredTopicId: params.run.provenance.selectedScoredTopicId,
       assetBundleId: bundle.id,
       allowMockInputUsed: params.allowMockInputUsed,
+      sourceExecutionPurpose: params.run.executionPurpose ?? "business_experiment",
+      allowIntegrationTestInputUsed: params.allowIntegrationTestInputUsed ?? false,
     },
     assetBundle: bundle,
     cmsWriteRequest,
@@ -150,5 +154,6 @@ export function buildCmsWriteDryRunPreview(run: FinalCmsWriterRun, options: Buil
     overrides: { allowMockInput: options.allowMockInputUsed },
     compatibility: run.compatibility,
     confirmation: "No CMS write or publish occurred. This is a local preview only — no network request was made.",
+    sourceExecutionPurpose: run.provenance.sourceExecutionPurpose ?? "business_experiment",
   };
 }

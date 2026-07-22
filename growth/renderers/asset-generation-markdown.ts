@@ -23,6 +23,16 @@ export function renderAssetGenerationMarkdown(run: FinalAssetGenerationRun): str
 
   lines.push("# Asset Generation Review", "");
 
+  if (run.executionPurpose === "integration_test") {
+    lines.push(
+      "> 🛑 **ENGINEERING INTEGRATION TEST** — this run exists only to validate the Asset Generation → human review → CMS Writer " +
+        "pipeline end-to-end. It is **not** a business-approved growth experiment.",
+      `> Source topic recommendation: **${run.integrationTestReview?.sourceRecommendation ?? "unknown"}** — Topic Scoring was not overridden or mutated.`,
+      `> Reviewed by: **${run.integrationTestReview?.reviewedBy ?? "unknown"}**${run.integrationTestReview?.reviewNote ? ` — "${run.integrationTestReview.reviewNote}"` : ""}`,
+      "> Business approval: **not granted**. CMS write was not performed. The site was not modified. Publication is not approved.",
+      ""
+    );
+  }
   if (run.generation.isMock) {
     lines.push("> ⚠ This content was produced by the **Mock Provider** — for engineering validation only, not real market copy.", "");
   }
@@ -155,6 +165,7 @@ export function renderAssetGenerationMarkdown(run: FinalAssetGenerationRun): str
   lines.push("");
 
   lines.push("## Generation Metadata", "");
+  lines.push(`- **Execution purpose:** ${run.executionPurpose ?? "business_experiment"}`);
   lines.push(`- **Provider:** ${run.generation.provider}${run.generation.isMock ? " (MOCK — not real market copy)" : ""}`);
   lines.push(`- **Model:** ${run.generation.model}`);
   lines.push(`- **Language:** ${run.generation.language}`);
