@@ -68,6 +68,8 @@ export class AnthropicTopicScoringProvider implements TopicScoringProvider {
       responseFormat: RESPONSE_FORMAT,
       truncatedMessage:
         "Anthropic's response was truncated at the max_tokens limit before completing the structured topic-scoring response. Increase TOPIC_SCORING_MAX_TOKENS.",
+      likelyTruncatedJsonMessage:
+        "Anthropic's topic-scoring response was not valid JSON, which most likely means it was cut off before completing. Increase TOPIC_SCORING_MAX_TOKENS.",
     });
   }
 }

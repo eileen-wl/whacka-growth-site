@@ -59,8 +59,15 @@ export interface RunAnthropicStructuredRequestParams {
   maxTokens: number;
   /** The result of `zodOutputFormat(taskSpecificSchema)`, built once per task at module scope. */
   responseFormat: unknown;
-  /** Overrides the default max_tokens-truncation message with a task-specific one (e.g. naming the right env var). */
+  /** Overrides the default max_tokens-truncation message with a task-specific one (e.g. naming the right env var). Used only when `stop_reason` confirms truncation. */
   truncatedMessage?: string;
+  /**
+   * Overrides the default message for a *likely* (not confirmed) truncation —
+   * detected when the SDK's parse step fails with a raw JSON syntax error
+   * before `stop_reason` is ever observable. Task-specific so it can name the
+   * right env var, same as `truncatedMessage`.
+   */
+  likelyTruncatedJsonMessage?: string;
 }
 
 /**
@@ -84,6 +91,12 @@ export async function runAnthropicStructuredRequest<T>(
       output_config: { format: params.responseFormat },
     });
   } catch (err) {
+    if (err instanceof AnthropicError && isLikelyTruncatedJsonError(err)) {
+      throw new LLMProviderResponseError(
+        buildLikelyTruncationMessage(params.maxTokens, params.likelyTruncatedJsonMessage),
+        "truncated"
+      );
+    }
     throw mapAnthropicError(err);
   }
 
@@ -113,6 +126,33 @@ export async function runAnthropicStructuredRequest<T>(
     inputTokens: message.usage?.input_tokens ?? null,
     outputTokens: message.usage?.output_tokens ?? null,
   };
+}
+
+/**
+ * The SDK's `client.messages.parse()` throws this exact message shape
+ * ("Failed to parse structured output as JSON: <JSON.parse error>") when the
+ * model's raw text isn't syntactically valid JSON at all — as opposed to its
+ * differently-shaped "Failed to parse structured output: ...\nValidation
+ * issues:\n..." message for a syntactically valid response that just fails
+ * schema validation. A syntax-level JSON failure (e.g. an unterminated
+ * string) is the signature of output cut off mid-generation. This can't be
+ * distinguished by checking `stop_reason` because `.parse()` throws before
+ * returning the raw message — `stop_reason`/`usage` are already lost by the
+ * time this error reaches us.
+ */
+function isLikelyTruncatedJsonError(err: AnthropicError): boolean {
+  return /^Failed to parse structured output as JSON:/.test(err.message);
+}
+
+function buildLikelyTruncationMessage(maxTokens: number, taskSpecificMessage?: string): string {
+  const base =
+    taskSpecificMessage ??
+    "Anthropic's response was not valid JSON, which most likely means it was cut off before completing the structured response.";
+  return (
+    `${base} (Stop reason and output token count are unavailable for this specific failure — the SDK discards them ` +
+    `when the JSON parse step itself throws. The configured max_tokens for this request was ${maxTokens}.) ` +
+    "Try increasing the token limit."
+  );
 }
 
 /** Maps SDK errors to LLMProviderResponseError with a safe, actionable message — never echoes the API key or auth headers. */

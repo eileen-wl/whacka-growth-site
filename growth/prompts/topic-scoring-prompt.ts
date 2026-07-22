@@ -25,7 +25,7 @@ export const REPORTING_RULES: string[] = [
   "You must acknowledge when Search Console data was empty or missing for the source Signal Mining run, if that context is supplied.",
   "You must acknowledge that Whacka product-side conversions are not connected, if that context is supplied.",
   "You must acknowledge explicitly when the source Signal Mining run was mock-generated or its topics were not yet human-approved, if that context is supplied.",
-  "You must keep every rationale concise and specific to the cited evidence.",
+  "You must keep every dimension rationale short: at most 2 sentences, ideally under 300 characters. State only what the cited evidence shows — never repeat the topic's problem statement/description, and never restate the scoring rubric or dimension definition.",
   "You must produce only the structured response — no prose outside the schema.",
   "You must not browse the web, use external knowledge, or cite external benchmarks.",
   "You must not invent search volume, market size, competitors, user feedback, traffic, or product conversions.",

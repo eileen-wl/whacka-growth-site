@@ -147,8 +147,8 @@ describe("isValidIsoDate / assertValidDateRange", () => {
 });
 
 describe("readProviderEnv", () => {
-  it("defaults TOPIC_SCORING_MAX_TOKENS to 8000 when unset", () => {
-    expect(readProviderEnv({} as NodeJS.ProcessEnv).maxTokens).toBe(8000);
+  it("defaults TOPIC_SCORING_MAX_TOKENS to 12000 when unset", () => {
+    expect(readProviderEnv({} as NodeJS.ProcessEnv).maxTokens).toBe(12000);
   });
 
   it("reads the topic-scoring-specific and fallback growth-report variables", () => {

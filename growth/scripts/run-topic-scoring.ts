@@ -29,7 +29,7 @@ const PROCESSED_DATA_DIR = join(GROWTH_DIR, "data", "processed");
 const SIGNALS_DIR = join(GROWTH_DIR, "signals");
 const SCORES_DIR = join(GROWTH_DIR, "scores");
 
-const DEFAULT_MAX_TOKENS = 8000;
+const DEFAULT_MAX_TOKENS = 12000;
 const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
 export class TopicScoringDateRangeError extends Error {}

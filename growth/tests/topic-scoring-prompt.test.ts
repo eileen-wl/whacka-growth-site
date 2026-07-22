@@ -48,6 +48,15 @@ describe("REPORTING_RULES", () => {
     const joined = REPORTING_RULES.join(" ").toLowerCase();
     expect(joined).toContain("opportunity favourability");
   });
+
+  it("requires concise, evidence-only dimension rationales with a quantified limit", () => {
+    const rule = REPORTING_RULES.find((r) => r.toLowerCase().includes("rationale"));
+    expect(rule).toBeDefined();
+    expect(rule).toContain("2 sentences");
+    expect(rule).toContain("300 characters");
+    expect(rule?.toLowerCase()).toContain("never repeat the topic");
+    expect(rule?.toLowerCase()).toContain("never restate the scoring rubric");
+  });
 });
 
 describe("buildReportingRules / buildSystemPrompt", () => {

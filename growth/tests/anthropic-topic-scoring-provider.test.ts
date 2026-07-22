@@ -1,4 +1,4 @@
-import { AuthenticationError, InternalServerError, RateLimitError } from "@anthropic-ai/sdk";
+import { AnthropicError, AuthenticationError, InternalServerError, RateLimitError } from "@anthropic-ai/sdk";
 import { describe, expect, it, vi } from "vitest";
 import { AnthropicTopicScoringProvider } from "../llm/anthropic-topic-scoring-provider";
 import { LLMProviderConfigError, LLMProviderResponseError } from "../llm/provider";
@@ -140,6 +140,37 @@ describe("AnthropicTopicScoringProvider — response failure handling", () => {
     const { client } = fakeClient(async () => baseMessage({ stop_reason: "max_tokens" }));
     const provider = new AnthropicTopicScoringProvider({ model: "claude-test-model", client });
     await expect(provider.generateStructuredScores(REQUEST)).rejects.toMatchObject({ reason: "truncated" });
+  });
+
+  it("treats a raw JSON syntax parse failure (the SDK's own truncation signature) as a truncation, not a generic schema failure", async () => {
+    const { client } = fakeClient(async () => {
+      throw new AnthropicError("Failed to parse structured output as JSON: Unterminated string in JSON at position 19210");
+    });
+    const provider = new AnthropicTopicScoringProvider({ model: "claude-test-model", client });
+
+    try {
+      await provider.generateStructuredScores(REQUEST);
+      expect.unreachable();
+    } catch (err) {
+      const providerError = err as LLMProviderResponseError;
+      expect(providerError).toBeInstanceOf(LLMProviderResponseError);
+      expect(providerError.reason).toBe("truncated");
+      expect(providerError.message).toContain("TOPIC_SCORING_MAX_TOKENS");
+      expect(providerError.message).toContain("8000"); // REQUEST.maxTokens, safe metadata
+      expect(providerError.message).not.toContain("Unterminated string in JSON at position 19210"); // never echoes raw model/SDK parse detail
+      expect(providerError.message).not.toContain("USER_PROMPT_TEXT");
+      expect(providerError.message).not.toContain("SYSTEM_PROMPT_TEXT");
+    }
+  });
+
+  it("still treats a schema-validation failure on well-formed JSON as missing_parsed_output, not truncation", async () => {
+    const { client } = fakeClient(async () => {
+      throw new AnthropicError(
+        'Failed to parse structured output: Invalid input\nValidation issues:\n- topicAssessments: Required'
+      );
+    });
+    const provider = new AnthropicTopicScoringProvider({ model: "claude-test-model", client });
+    await expect(provider.generateStructuredScores(REQUEST)).rejects.toMatchObject({ reason: "missing_parsed_output" });
   });
 });
 

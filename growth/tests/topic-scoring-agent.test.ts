@@ -7,6 +7,7 @@ import {
   validateTopicScoringAnalysis,
 } from "../agents/topic-scoring-agent";
 import { getTopicScoringProfile } from "../scoring/topic-scoring-profile";
+import { LLMProviderResponseError } from "../llm/topic-scoring-provider";
 import type { TopicScoringProvider } from "../llm/topic-scoring-provider";
 import type { FinalSignalMiningRun } from "../types/signal-mining";
 import type { DimensionAssessment, TopicAssessment, TopicScoringAnalysis } from "../types/topic-scoring";
@@ -384,5 +385,17 @@ describe("runTopicScoringAgent — end to end", () => {
     const run = fixtureSignalMiningRun();
     const invalidAnalysis = { ...fixtureAnalysis(["topic_1"]), rank: 1 } as unknown as TopicScoringAnalysis;
     await expect(runTopicScoringAgent({ ...baseParams, run, provider: new FakeProvider(invalidAnalysis) })).rejects.toThrow(TopicScoringValidationError);
+  });
+
+  it("propagates a provider truncation error untouched and assembles no run — the caller never reaches its file-write step", async () => {
+    class ThrowingProvider implements TopicScoringProvider {
+      readonly name = "anthropic";
+      async generateStructuredScores(): Promise<never> {
+        throw new LLMProviderResponseError("Anthropic's topic-scoring response was not valid JSON, most likely truncated.", "truncated");
+      }
+    }
+
+    const run = fixtureSignalMiningRun();
+    await expect(runTopicScoringAgent({ ...baseParams, run, provider: new ThrowingProvider() })).rejects.toMatchObject({ reason: "truncated" });
   });
 });
