@@ -1772,3 +1772,112 @@ npm run growth:cms-write -- \
 See `growth/cms/README.md` for the full AssetBundle → CMSWriteRequest →
 appTool payload mapping.
 
+## Growth Site Engine — Sanity draft preview mode
+
+### Role in the fixed Growth Loop
+
+Step 5 — renders `appTool` documents (`src/lib/sanity.ts`) as real Astro
+pages (`src/pages/apps/[slug].astro`, `src/pages/index.astro`):
+
+```
+1. Signal Mining Agent · 2. Topic Scoring Agent · 3. Asset Generation Agent ·
+4. CMS Writer · **5. Growth Site Engine** · 6. Tracking Layer ·
+7. Growth Report Agent · 8. Experiment Decision Agent ·
+9. results return to the next Signal / Topic Pool cycle
+```
+
+In **normal mode** (no flags, every existing `npm run dev`/`npm run build`),
+this is completely unchanged: the site queries Sanity's default
+`"published"` perspective (or falls back to `src/data/apps.ts` when Sanity
+isn't configured) — an unpublished draft (e.g. `drafts.appTool-slotsmith`)
+is never visible, and the current 5 published apps behave exactly as
+before.
+
+### Local Sanity draft preview mode
+
+A one-off, **local-only, server-only** flag lets an engineer verify that a
+real Sanity draft (e.g. one written by `growth:cms-write --write-draft`)
+actually renders correctly as an Astro page **before** anyone publishes it
+in Sanity Studio. This never publishes, never writes to Sanity, and never
+deploys — it only changes what the *local* dev server reads.
+
+```
+SANITY_PREVIEW_DRAFTS=true   # server-only, default false — see .env.example
+```
+
+- Reuses the existing `PUBLIC_SANITY_PROJECT_ID` / `PUBLIC_SANITY_DATASET`
+  / `SANITY_API_TOKEN` — no duplicate credential is introduced.
+- Requires `SANITY_API_TOKEN` (the same write token `growth:cms-write`
+  already uses, or any token with at least Viewer access) — draft content
+  is never visible to an unauthenticated request. Missing the token while
+  `SANITY_PREVIEW_DRAFTS=true` fails immediately and clearly (`astro
+  dev`/`astro build` refuses to start), rather than silently falling back
+  to published-only content.
+- The token is **never** `PUBLIC_`-prefixed, so Astro/Vite never inlines
+  it into a client-side bundle or rendered HTML — `src/lib/sanity.ts` is
+  only ever imported from `.astro` frontmatter (server-side execution),
+  never from a `<script>` block.
+- Preview mode uses the `"drafts"` perspective — the current,
+  non-deprecated value for the installed `@sanity/client@7.23.0`
+  (`"previewDrafts"` is marked `@deprecated use 'drafts' instead` in the
+  SDK's own type definitions; using it would be exactly the "blindly
+  hard-coding an unsupported/legacy value" this avoids) — and
+  `useCdn: false`, since Sanity's CDN never serves draft content. Normal
+  mode's `useCdn: true` is unchanged.
+- `drafts.appTool-slotsmith` resolves as the logical `appTool` document at
+  route `/apps/slotsmith` — the `drafts.` prefix is never part of
+  `slug`/the route, and when both a draft and a published version exist
+  for the same slug, the draft is shown exactly once (never two cards, two
+  pages, or a duplicate listing on the homepage) — `dedupeDraftsAndPublished`
+  in `src/lib/sanity.ts` collapses them deterministically, preferring the
+  draft.
+- All existing Sanity → `AppData` mapping is preserved unchanged: SEO
+  (`seo.title`/`metaDescription`/keywords), FAQ, CTA labels/href, steps,
+  and the Whacka prompt all render exactly as they would once published.
+  `demoUrl`/`remixUrl` being `null` still resolves to "unavailable" (never
+  fabricated); `buildUrl` is unchanged.
+
+### Preview indicator
+
+Whenever `SANITY_PREVIEW_DRAFTS=true`, every page (via
+`src/layouts/BaseLayout.astro`) shows a small banner: "⚠ Sanity draft
+preview — unpublished content. Not visible in production." It never
+appears in normal mode, and no internal integration-test metadata
+(hold status, reviewer, etc.) is added to the public page — only this one
+generic preview notice. A server-side console log also confirms preview
+mode on startup; it never logs the token or any credential value.
+
+### Running it locally (Windows PowerShell, from the project root)
+
+```powershell
+$env:SANITY_PREVIEW_DRAFTS="true"
+npm run dev
+```
+
+Then open **http://localhost:4321/apps/slotsmith** (or whatever port
+`astro dev` actually binds — it prints the real URL on startup) to see the
+unpublished `drafts.appTool-slotsmith` draft rendered as a real page.
+
+To go back to normal (published-only) mode in the same terminal session:
+
+```powershell
+Remove-Item Env:\SANITY_PREVIEW_DRAFTS
+npm run dev
+```
+
+(Closing the terminal also clears it — `SANITY_PREVIEW_DRAFTS` is never
+written to `.env` by this workflow, so a fresh terminal always starts in
+normal mode.)
+
+**Never deploy with `SANITY_PREVIEW_DRAFTS=true`** — a public Vercel
+deployment (or any shared environment) with this flag set would make
+unpublished draft content visible to real site visitors. This flag is for
+a local `npm run dev` session only; there is no Vercel deployment command
+for preview mode, and none should be added.
+
+### Common errors
+
+| Error | Cause |
+| --- | --- |
+| `SANITY_PREVIEW_DRAFTS=true requires SANITY_API_TOKEN to be set in .env ...` | Preview mode was requested without a token — set `SANITY_API_TOKEN` or unset `SANITY_PREVIEW_DRAFTS`. |
+

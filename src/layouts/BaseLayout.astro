@@ -1,5 +1,6 @@
 ---
 import "../styles/global.css";
+import { SANITY_PREVIEW_MODE } from "../lib/sanity";
 
 interface Props {
   title: string;
@@ -74,6 +75,16 @@ const isDev = import.meta.env.DEV;
     />
   </head>
   <body>
+    {
+      SANITY_PREVIEW_MODE && (
+        <div
+          role="status"
+          style="background:#7c2d12;color:#fff;text-align:center;padding:0.5rem 1rem;font:600 0.875rem/1.4 system-ui,sans-serif;"
+        >
+          ⚠ Sanity draft preview — unpublished content. Not visible in production.
+        </div>
+      )
+    }
     <header class="site-header">
       <div class="container header-inner">
         <a href="/" class="brand">
