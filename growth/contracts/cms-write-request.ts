@@ -4,8 +4,8 @@ import { assetBundleSchema, type AssetBundle } from "./asset-bundle";
 import { assertSupportedMajorVersion, campaignIdSchema, isoTimestampSchema, provenanceSchema, schemaVersionSchema } from "./common";
 
 /**
- * CMSWriteRequest — step 5 input, an execution REQUEST consumed later by the
- * CMS Writer. This is deliberately not the Sanity write itself: no network
+ * CMSWriteRequest — step 4 input, an execution REQUEST consumed by the
+ * CMS Writer (growth/cms/). This is deliberately not the Sanity write itself: no network
  * call happens anywhere in this file. `payload` mirrors the exact document
  * shape `scripts/seed.ts` sends to `client.createOrReplace()` today (same
  * `_id` convention — `appTool-{slug}` via `toDocId()` — same Sanity `slug`
@@ -13,7 +13,16 @@ import { assertSupportedMajorVersion, campaignIdSchema, isoTimestampSchema, prov
  * pass `payload` straight into `client.createOrReplace()` without reshaping it.
  */
 
-export const CMS_WRITE_REQUEST_SUPPORTED_MAJOR_VERSION = 1;
+/**
+ * Bumped to 2 when `payload.seo` was added as a new required field (the
+ * Sanity `appTool` schema now persists SEO metadata — see
+ * studio/schemaTypes/appTool.ts and growth/contracts/README.md). A new
+ * required field is a breaking change per growth/contracts/common.ts's own
+ * versioning rule, so old (pre-SEO) CMSWriteRequest documents are no longer
+ * schema-compatible. No real CMSWriteRequest documents existed before CMS
+ * Writer shipped, so nothing needs migration.
+ */
+export const CMS_WRITE_REQUEST_SUPPORTED_MAJOR_VERSION = 2;
 
 const DOC_ID_PREFIX = "appTool-";
 
@@ -47,6 +56,16 @@ export const cmsFaqPayloadSchema = z.strictObject({
   answer: z.string().min(1).max(1000),
 });
 
+/** Mirrors studio/schemaTypes/appTool.ts's optional `seo` object field exactly. Required here because `buildCmsWriteRequest` always has a validated AssetBundle.seo to map from. */
+export const cmsSeoPayloadSchema = z.strictObject({
+  title: z.string().min(1).max(200),
+  metaDescription: z.string().min(1).max(300),
+  primaryKeyword: z.string().min(1).max(160),
+  secondaryKeywords: z.array(z.string().min(1).max(160)).max(20),
+});
+
+export type CmsSeoPayload = z.infer<typeof cmsSeoPayloadSchema>;
+
 /** 1:1 with the document `scripts/seed.ts` writes via `client.createOrReplace()` — see studio/schemaTypes/appTool.ts for the authoritative field list. */
 export const appToolPayloadSchema = z.strictObject({
   _id: z.string().min(1).max(200),
@@ -73,6 +92,7 @@ export const appToolPayloadSchema = z.strictObject({
   remixUrl: z.union([z.url(), z.null()]),
   buildUrl: z.union([z.url(), z.null()]),
   utmContent: z.union([z.string().min(1).max(160), z.null()]),
+  seo: cmsSeoPayloadSchema,
 });
 
 export type AppToolPayload = z.infer<typeof appToolPayloadSchema>;
@@ -194,10 +214,16 @@ export function buildCmsWriteRequest(assetBundle: AssetBundle, options: BuildCms
     remixUrl: bundle.cta.remixUrl,
     buildUrl: bundle.cta.buildUrl,
     utmContent: bundle.cta.utmContent,
+    seo: {
+      title: bundle.seo.title,
+      metaDescription: bundle.seo.metaDescription,
+      primaryKeyword: bundle.seo.primaryKeyword,
+      secondaryKeywords: bundle.seo.secondaryKeywords,
+    },
   };
 
   const request: CMSWriteRequest = {
-    schemaVersion: "1.0.0",
+    schemaVersion: "2.0.0",
     id: deterministicId("cmswriterequest", bundle.id, mode),
     createdAt: new Date().toISOString(),
     assetBundleId: bundle.id,

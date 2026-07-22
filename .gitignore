@@ -43,4 +43,10 @@ growth/scores/*.md
 growth/assets/*.json
 growth/assets/*.md
 
+# generated CMS write previews/receipts (keep the folders via .gitkeep)
+growth/cms-output/requests/*.json
+growth/cms-output/requests/*.md
+growth/cms-output/receipts/*.json
+growth/cms-output/receipts/*.md
+
 /secrets/

@@ -58,6 +58,7 @@ async function seed() {
       faq: withKeys(app.faq),
       status: "published",
       notes: "Seeded from src/data/apps.ts",
+      seo: app.seo,
     };
 
     await client.createOrReplace(doc);

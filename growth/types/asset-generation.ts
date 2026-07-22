@@ -202,7 +202,6 @@ export interface AssetGenerationContext {
   allowedCtaTypes: string[];
   requestedSocialChannels: string[];
   existingAppCatalog: AssetGenerationExistingAppCatalogEntry[];
-  seoPersistenceLimitation: string;
   cmsFieldRequirements: string[];
 }
 
@@ -313,7 +312,6 @@ export interface AssetGenerationDryRunPreview {
   generationContext: AssetGenerationContext;
   existingAppCatalog: AssetGenerationExistingAppCatalogEntry[];
   requestedSocialChannels: string[];
-  seoPersistenceLimitation: string;
   language: SupportedLanguage;
   intendedProvider: string;
   intendedModel: string;

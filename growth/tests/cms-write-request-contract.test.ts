@@ -107,6 +107,16 @@ describe("buildCmsWriteRequest", () => {
     expect(request.payload.buildUrl).toBe("https://whacka.example.com/build/stocktrack");
     expect(request.payload.utmContent).toBe("stocktrack_launch");
   });
+
+  it("maps AssetBundle.seo onto payload.seo", () => {
+    const request = buildCmsWriteRequest(fixtureAssetBundle(), { generatedBy: "cms-writer" });
+    expect(request.payload.seo).toEqual({
+      title: "StockTrack — Inventory Tracker",
+      metaDescription: "Track stock levels without a spreadsheet.",
+      primaryKeyword: "inventory tracker",
+      secondaryKeywords: [],
+    });
+  });
 });
 
 describe("cmsWriteRequestSchema", () => {
@@ -143,6 +153,13 @@ describe("cmsWriteRequestSchema", () => {
     expect(() => validateCmsWriteRequest(request)).toThrow(CMSWriteRequestValidationError);
   });
 
+  it("rejects a payload missing the seo object", () => {
+    const request = fixtureRequest() as unknown as Record<string, unknown>;
+    const payload = request.payload as Record<string, unknown>;
+    delete payload.seo;
+    expect(() => validateCmsWriteRequest(request)).toThrow(CMSWriteRequestValidationError);
+  });
+
   it("accepts a draft_write mode request with a dataset", () => {
     const request = buildCmsWriteRequest(fixtureAssetBundle(), { generatedBy: "cms-writer", mode: "draft_write", dataset: "production" });
     expect(() => validateCmsWriteRequest(request)).not.toThrow();
@@ -150,6 +167,6 @@ describe("cmsWriteRequestSchema", () => {
   });
 
   it("throws on an unsupported major schema version", () => {
-    expect(() => validateCmsWriteRequest(fixtureRequest({ schemaVersion: "2.0.0" }))).toThrow();
+    expect(() => validateCmsWriteRequest(fixtureRequest({ schemaVersion: "99.0.0" }))).toThrow();
   });
 });

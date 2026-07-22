@@ -232,18 +232,24 @@ directly from those two files before this contract was written.
 | `cta.remixUrl`            | `remixUrl` (optional)            |       |
 | `cta.buildUrl`            | `buildUrl` (optional)            |       |
 | `cta.utmContent`          | `utmContent` (optional)          | The only per-app UTM field Sanity has — `utm_source`/`utm_campaign` are code constants (`src/lib/utm.ts`) and `utm_medium` is derived per CTA type (`src/lib/tracking.ts`), not CMS-configurable. `AssetBundle.cta` deliberately does not model a full `{source,medium,campaign,content}` object for this reason. |
+| `seo.title`               | `seo.title` (optional object, required within `CMSWriteRequest.payload`) | |
+| `seo.metaDescription`     | `seo.metaDescription`            | |
+| `seo.primaryKeyword`      | `seo.primaryKeyword`             | |
+| `seo.secondaryKeywords`   | `seo.secondaryKeywords`          | |
 | —                          | `notes` (optional, internal)     | Not populated by `AssetBundle`/`CMSWriteRequest` — `payload.notes` is always `null`. Editorial-only field, out of scope for generated content. |
 
-**Known gap, discovered while building this contract:** the Sanity
-`appTool` schema has **no SEO-specific fields** (no `metaTitle`,
-`metaDescription`, `keywords`, or similar) beyond `faq` (which already maps
-above). `AssetBundle.seo.title` / `.metaDescription` / `.primaryKeyword` /
-`.secondaryKeywords` are kept as useful intermediate generated content for
-future renderers, but as of this schema version **`CMSWriteRequest` cannot
-persist them anywhere in Sanity**. If SEO metadata needs to reach the CMS, a
-future minor/major version of the `appTool` schema (and this contract) needs
-to add the corresponding field(s) — this directory does not attempt to work
-around that by inventing a side-channel.
+**Resolved gap (previously documented here as unresolved):** the Sanity
+`appTool` schema now has a `seo` object field (`title`, `metaDescription`,
+`primaryKeyword`, `secondaryKeywords` — see `studio/schemaTypes/appTool.ts`),
+added specifically so CMS Writer (step 4) can persist
+`AssetBundle.seo.*`. The Sanity field stays optional for backward
+compatibility with documents seeded before this change; `CMSWriteRequest.payload.seo`
+is a required field because every `CMSWriteRequest` built by
+`buildCmsWriteRequest` always has a validated `AssetBundle.seo` to map
+from. This is why `CMS_WRITE_REQUEST_SUPPORTED_MAJOR_VERSION` was bumped
+from `1` to `2` — a new required payload field is a breaking change per the
+versioning rules below. See `growth/cms/README.md` for the full CMS Writer
+mapping.
 
 `CMSWriteRequest.payload` mirrors the exact document shape
 `scripts/seed.ts` sends to `client.createOrReplace()`: same `_id` convention

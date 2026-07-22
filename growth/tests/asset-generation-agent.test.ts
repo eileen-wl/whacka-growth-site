@@ -335,8 +335,9 @@ describe("computeValidationStatus", () => {
     generationIsMock: false,
   };
 
-  it("always returns needs_review in v1, because the SEO persistence warning is always present", () => {
-    expect(computeValidationStatus(baseCtx).status).toBe("needs_review");
+  it("returns valid when every review trigger is clean (SEO persistence is no longer a blocker)", () => {
+    expect(computeValidationStatus(baseCtx).status).toBe("valid");
+    expect(computeValidationStatus(baseCtx).reasons).toEqual([]);
   });
 
   it("includes a reason for mock source input", () => {
@@ -385,7 +386,7 @@ describe("assembleAssetBundle", () => {
     expect(bundle.app.status).toBe("draft");
   });
 
-  it("always includes the SEO persistence warning", () => {
+  it("does not include the obsolete SEO persistence warning", () => {
     const context = buildContext();
     const bundle = assembleAssetBundle({
       analysis: fixtureAnalysis(),
@@ -400,10 +401,10 @@ describe("assembleAssetBundle", () => {
       allowUnapprovedTopicUsed: false,
       allowHoldTopicUsed: false,
     });
-    expect(bundle.validation.warnings.some((w) => w.includes("does not yet persist them"))).toBe(true);
+    expect(bundle.validation.warnings.some((w) => w.includes("does not yet persist"))).toBe(false);
   });
 
-  it("sets validation.status to needs_review (agent-level 'valid' maps to contract status 'draft', but v1 is always needs_review)", () => {
+  it("sets validation.status to needs_review when the source Topic Scoring run was mock-generated and unapproved", () => {
     const context = buildContext();
     const bundle = assembleAssetBundle({
       analysis: fixtureAnalysis(),

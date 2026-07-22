@@ -88,7 +88,6 @@ export function buildUserPrompt(params: BuildUserPromptParams): string {
     `Source topics human-approved: ${params.context.sourceTopicsHumanReviewed}`,
     `Allowed CTA types: ${params.allowedCtaTypes.join(", ")}`,
     `Requested social channels: ${channels}`,
-    `Known SEO persistence limitation: ${params.context.seoPersistenceLimitation}`,
     "",
     "Selected topic and scored-topic assessment (the ONLY evidence you may cite or build from):",
     JSON.stringify(

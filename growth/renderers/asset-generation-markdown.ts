@@ -88,7 +88,7 @@ export function renderAssetGenerationMarkdown(run: FinalAssetGenerationRun): str
   lines.push("### App Prompt (Whacka Prompt)", "", "```", bundle.app.appPrompt, "```", "");
 
   lines.push("## SEO Assets", "");
-  lines.push("> Current Sanity `appTool` schema does not yet persist all SEO fields.", "");
+  lines.push("> SEO fields are persisted by the current Sanity `appTool` schema; CMS Writer will map them onto the draft document.", "");
   lines.push(`- **SEO title:** ${bundle.seo.title}`);
   lines.push(`- **Meta description:** ${bundle.seo.metaDescription}`);
   lines.push(`- **Primary keyword:** ${bundle.seo.primaryKeyword}`);

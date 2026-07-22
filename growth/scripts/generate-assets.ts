@@ -20,7 +20,6 @@ import {
   resolveSelectedTopic,
   runAssetGenerationAgent,
   ASSET_GENERATION_ALLOWED_CTA_TYPES,
-  SEO_PERSISTENCE_WARNING,
 } from "../agents/asset-generation-agent";
 import { buildAssetGenerationLLMRequest } from "../prompts/asset-generation-prompt";
 import { renderAssetGenerationMarkdown } from "../renderers/asset-generation-markdown";
@@ -473,7 +472,6 @@ export function buildDryRunPreview(params: BuildDryRunPreviewParams): AssetGener
     generationContext: context,
     existingAppCatalog,
     requestedSocialChannels: params.socialChannels,
-    seoPersistenceLimitation: SEO_PERSISTENCE_WARNING,
     language: params.language,
     intendedProvider: params.intendedProvider,
     intendedModel: params.intendedModel ?? "not_configured",

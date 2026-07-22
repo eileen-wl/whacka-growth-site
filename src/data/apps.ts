@@ -8,6 +8,13 @@ export interface Screenshot {
   caption: string;
 }
 
+export interface SeoData {
+  title?: string;
+  metaDescription?: string;
+  primaryKeyword?: string;
+  secondaryKeywords?: string[];
+}
+
 export interface AppData {
   slug: string;
   name: string;
@@ -24,6 +31,7 @@ export interface AppData {
   ctaHref: string;
   relatedSlugs: string[];
   faq: FaqItem[];
+  seo?: SeoData;
 }
 
 export interface Category {

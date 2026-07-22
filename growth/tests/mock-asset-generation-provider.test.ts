@@ -33,7 +33,6 @@ function fixtureContext(overrides: Partial<AssetGenerationContext> = {}): AssetG
     allowedCtaTypes: ["view_demo", "remix", "build", "copy_prompt"],
     requestedSocialChannels: [],
     existingAppCatalog: [{ name: "Orderly", slug: "orderly", hook: "Order tracker", status: "unknown" }],
-    seoPersistenceLimitation: "SEO fields are present in AssetBundle but the current Sanity appTool schema does not yet persist them.",
     cmsFieldRequirements: ["app.name is required."],
     ...overrides,
   };

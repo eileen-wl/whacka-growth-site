@@ -192,6 +192,38 @@ export const appTool = defineType({
       description: "Value used for the utm_content tracking parameter on outbound links.",
       type: "string",
     }),
+    defineField({
+      name: "seo",
+      title: "SEO",
+      description: "Optional search-engine metadata for this app's detail page. Leave unset to fall back to the page's default title/description.",
+      type: "object",
+      fields: [
+        defineField({
+          name: "title",
+          title: "SEO Title",
+          type: "string",
+          validation: (Rule) => Rule.max(70).warning("SEO titles are usually most effective under 70 characters."),
+        }),
+        defineField({
+          name: "metaDescription",
+          title: "Meta Description",
+          type: "text",
+          rows: 2,
+          validation: (Rule) => Rule.max(300).warning("Meta descriptions are usually most effective under 160 characters."),
+        }),
+        defineField({
+          name: "primaryKeyword",
+          title: "Primary Keyword",
+          type: "string",
+        }),
+        defineField({
+          name: "secondaryKeywords",
+          title: "Secondary Keywords",
+          type: "array",
+          of: [{ type: "string" }],
+        }),
+      ],
+    }),
   ],
   preview: {
     select: { title: "name", subtitle: "tagline" },

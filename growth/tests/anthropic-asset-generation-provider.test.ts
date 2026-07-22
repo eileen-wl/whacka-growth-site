@@ -34,7 +34,6 @@ const CONTEXT: AssetGenerationContext = {
   allowedCtaTypes: ["view_demo", "remix", "build", "copy_prompt"],
   requestedSocialChannels: [],
   existingAppCatalog: [],
-  seoPersistenceLimitation: "SEO fields are present in AssetBundle but the current Sanity appTool schema does not yet persist them.",
   cmsFieldRequirements: [],
 };
 

@@ -11,13 +11,13 @@ import {
 } from "./common";
 
 /**
- * AssetBundle — step 4 output (Asset Generation Agent), the complete
+ * AssetBundle — step 3 output (Asset Generation Agent), the complete
  * generated content for one approved ScoredTopic. Field names inside `app`
  * intentionally mirror the REAL Sanity `appTool` schema (studio/schemaTypes/appTool.ts)
  * and the REAL frontend `AppData` type (src/data/apps.ts) 1:1 — see
- * growth/contracts/README.md for the full field-by-field mapping table and
- * the handful of fields (`seo.*`) that do NOT correspond to any current CMS
- * field yet.
+ * growth/contracts/README.md for the full field-by-field mapping table,
+ * including `seo.*`, which step 4 (CMS Writer) maps onto the Sanity
+ * `appTool` schema's own `seo` object field.
  *
  * Two deliberate departures from the Sanity field names:
  * - `app.appPrompt` maps to Sanity's `prompt` field. Renamed here only to
@@ -88,14 +88,10 @@ export const assetCreativeBriefSchema = z.strictObject({
 export type AssetCreativeBrief = z.infer<typeof assetCreativeBriefSchema>;
 
 /**
- * Useful intermediate SEO content. NOTE: as of this schema version, the
- * Sanity `appTool` document has no metaTitle/metaDescription/keywords
- * fields — only `seo.faq`'s counterpart (`app.faq` above) maps to a real
- * CMS field. This section is kept for future use and for renderers that
- * consume AssetBundle directly, but a CMSWriteRequest built from an
- * AssetBundle today cannot persist `seo.title`/`seo.metaDescription`/
- * `seo.primaryKeyword`/`seo.secondaryKeywords` anywhere in Sanity. Documented
- * as a known gap in growth/contracts/README.md.
+ * SEO content generated alongside the app concept. The Sanity `appTool`
+ * schema persists this via its `seo` object field (studio/schemaTypes/appTool.ts),
+ * mapped onto `CMSWriteRequest.payload.seo` by
+ * growth/contracts/cms-write-request.ts's `buildCmsWriteRequest`.
  */
 export const assetSeoSchema = z.strictObject({
   title: z.string().min(1).max(200),

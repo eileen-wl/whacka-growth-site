@@ -89,7 +89,7 @@ function fixtureAssetBundle(): AssetBundle {
     generation: { provider: "mock", model: "mock-v0", isMock: true, promptVersion: "1.0.0", evidenceRefs: [], signalRefs: ["signal_1"], findingRefs: [] },
     validation: {
       status: "needs_review",
-      warnings: ["SEO fields are present in AssetBundle but the current Sanity appTool schema does not yet persist them.", "Source Topic Scoring run was mock-generated (generation.isMock = true)."],
+      warnings: ["Source Topic Scoring run was mock-generated (generation.isMock = true)."],
       humanReviewRequired: true,
     },
     provenance: { generatedBy: "asset-generation-agent", sourceFileNames: ["topic-scoring-x.json"], sourceHashes: ["hash"], sourceRecordIds: ["scoredtopic_abc"], sourceDecisionId: null, provider: "mock", model: "mock-v0", isMock: true, humanReviewed: false },
@@ -121,7 +121,7 @@ function fixtureRun(overrides: Partial<FinalAssetGenerationRun> = {}): FinalAsse
     selectedTopic: fixtureTopic(),
     selectedScoredTopic: fixtureScoredTopic(),
     assetBundle: fixtureAssetBundle(),
-    compatibility: { sanityAppToolCompatible: true, astroAppDataCompatible: true, seoPersistenceAvailable: false, cmsWritePerformed: false, siteModified: false, warnings: ["SEO fields are present in AssetBundle but the current Sanity appTool schema does not yet persist them."] },
+    compatibility: { sanityAppToolCompatible: true, astroAppDataCompatible: true, seoPersistenceAvailable: true, cmsWritePerformed: false, siteModified: false, warnings: [] },
     humanReview: { required: true, approved: false, approvedBy: null, approvedAt: null, note: "AssetBundle must be reviewed before CMS Writer creates a Sanity draft." },
     dataQuality: { overallStatus: "partial", warnings: [], limitations: [] },
     ...overrides,
@@ -160,9 +160,9 @@ describe("renderAssetGenerationMarkdown", () => {
     expect(md).toContain("Build a mini app called Inventory Tracker.");
   });
 
-  it("prominently shows the SEO persistence limitation", () => {
+  it("confirms SEO fields are persisted by the current Sanity appTool schema", () => {
     const md = renderAssetGenerationMarkdown(fixtureRun());
-    expect(md).toContain("Current Sanity `appTool` schema does not yet persist all SEO fields.");
+    expect(md).toContain("SEO fields are persisted by the current Sanity `appTool` schema");
   });
 
   it("displays a null CTA URL as Unavailable, never blank or a placeholder", () => {

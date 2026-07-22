@@ -1254,7 +1254,7 @@ Experiment Decision Agents already treat them.
 ### Role in the fixed Growth Loop, and how it differs from Topic Scoring
 
 Step 3 — reads step 2's output and prepares input for CMS Writer (step 4,
-not yet built):
+below):
 
 ```
 1. Signal Mining Agent · 2. Topic Scoring Agent · **3. Asset Generation Agent** ·
@@ -1352,21 +1352,21 @@ for those exact channels, and any post for an unrequested channel is
 rejected outright (not silently dropped). Social copy never implies the
 post was actually published anywhere.
 
-### AssetBundle compatibility and the current SEO persistence gap
+### AssetBundle compatibility and SEO persistence
 
 `AssetBundle.app.*` maps field-for-field onto the real Sanity `appTool`
 schema and `AppData` type (see the Front-Half Contracts section above) —
-this Agent reuses that existing contract unchanged. One known gap,
-carried over from the contracts work and re-surfaced by every generated
-bundle: **the current Sanity `appTool` schema has no SEO-specific
-fields**, so `AssetBundle.seo.*` (title/metaDescription/primaryKeyword/
-secondaryKeywords) has nowhere to persist yet — only `seo.faq` (which maps
-to the real `app.faq` field) does. Every generated bundle carries the
-factual warning *"SEO fields are present in AssetBundle but the current
-Sanity appTool schema does not yet persist them"* in
-`validation.warnings` and `compatibility.warnings` — the fields are never
-silently discarded, and CMS Writer (not this Agent) is what will
-eventually need to resolve that mapping gap.
+this Agent reuses that existing contract unchanged. **SEO persistence is
+resolved:** the Sanity `appTool` schema now has a `seo` object field
+(`title`, `metaDescription`, `primaryKeyword`, `secondaryKeywords` — see
+`studio/schemaTypes/appTool.ts`), and CMS Writer (step 4, below) maps
+`AssetBundle.seo.*` onto it when it builds a Sanity draft.
+`compatibility.seoPersistenceAvailable` is `true` for every run produced
+by this Agent going forward; the obsolete "SEO fields ... does not yet
+persist them" warning no longer appears in `validation.warnings` or
+`compatibility.warnings`. AssetBundle files generated before this change
+are not migrated — they still carry the old warning text and
+`seoPersistenceAvailable: false`, which is expected and harmless.
 
 ### CTA URL and UTM rules
 
@@ -1406,13 +1406,14 @@ the hash).
 Every run's `humanReview` object is fixed by the Agent, never by the
 model: `required: true`, `approved: false`, `approvedBy: null`,
 `approvedAt: null`. `AssetBundle.validation.status` is computed
-deterministically too (never provider-supplied) — in v1 it is always
-`"needs_review"`, because the SEO persistence gap above is always present;
-`"draft"` (the contract's only other allowed value) only becomes reachable
-once that gap and every other review trigger (mock source, unapproved
-topic, override flags used, a non-`"advance"` recommendation, generated
+deterministically too (never provider-supplied): it is `"needs_review"`
+whenever any review trigger applies (mock source, unapproved topic,
+override flags used, a non-`"advance"` recommendation, generated
 assumptions/limitations, an unavailable primary CTA URL, Mock Provider
-generation) no longer apply. **Confirmed: this Agent never calls
+generation), and `"draft"` only once every one of those no longer
+applies. In practice a real (non-mock, human-approved, `"advance"`)
+generation can now reach `"draft"` — SEO persistence is no longer an
+unconditional blocker. **Confirmed: this Agent never calls
 `@sanity/client`, never writes a document, and never modifies an Astro
 page** — `compatibility.cmsWritePerformed` and `.siteModified` are always
 `false`, checked by tests.
@@ -1435,4 +1436,154 @@ page** — `compatibility.cmsWritePerformed` and `.siteModified` are always
 | `Model generated a social post for channel "...", which was not requested.` | The model produced a post outside the explicit `--social-channels` allow-list — rejected, not patched. |
 | `Could not resolve a valid slug from the suggested name "..."` | The provider's slug suggestion normalized to an empty string. |
 | `Model response did not match the required schema: ...` | Zod validation failed (bad enum, empty required field, unknown key, invented URL/ID/status field, etc.). |
+
+## CMS Writer
+
+### Role in the fixed Growth Loop, and why it is not an Agent
+
+Step 4 — reads step 3's output (one `FinalAssetGenerationRun`) and turns it
+into a Sanity `appTool` **draft** document:
+
+```
+1. Signal Mining Agent · 2. Topic Scoring Agent · 3. Asset Generation Agent ·
+**4. CMS Writer** · 5. Growth Site Engine · 6. Tracking Layer ·
+7. Growth Report Agent · 8. Experiment Decision Agent ·
+9. results return to the next Signal / Topic Pool cycle
+```
+
+CMS Writer is **deliberately not an LLM Agent** — every other module in
+this list calls a provider-neutral LLM interface (Mock or Anthropic); CMS
+Writer never does. It is a deterministic mapping (`growth/cms/asset-to-cms-request.ts`
++ `growth/contracts/cms-write-request.ts`) plus one gated, real Sanity API
+call (`growth/cms/sanity-draft-writer.ts`). It never regenerates content,
+never changes topic scores, never collects new signals, and never creates
+another Agent.
+
+### SEO fields are now persisted
+
+The Sanity `appTool` schema has an optional `seo` object field (`title`,
+`metaDescription`, `primaryKeyword`, `secondaryKeywords` —
+`studio/schemaTypes/appTool.ts`), and the Astro app-detail page
+(`src/pages/apps/[slug].astro` via `src/layouts/BaseLayout.astro`) uses
+`seo.title`/`seo.metaDescription` for page metadata when present, falling
+back to the existing tagline/`shortDescription`-based title and
+description otherwise — no visible layout change, no new page section.
+This closes the SEO-persistence gap the Asset Generation Agent previously
+flagged in every run (see that section above).
+
+### Input boundary
+
+CMS Writer reads **only**
+`growth/assets/asset-generation-{start}_to_{end}-{topic-id}*.json` — never
+Topic Scoring, Signal Mining, Growth Summary, analytics raw files, Growth
+Report, Experiment Decision, or any arbitrary content file. It validates:
+the file parses as JSON and matches the `FinalAssetGenerationRun` shape;
+the requested period matches; the selected topic/scored-topic identity is
+internally consistent; the embedded `AssetBundle` passes its own contract
+validation (`validateAssetBundle`); `AssetBundle.app.status` is `"draft"`;
+the source run's `compatibility.cmsWritePerformed` and `.siteModified` are
+both `false`. An unsupported schema major version is rejected (delegated
+to `validateAssetBundle`'s own `assertSupportedMajorVersion` check).
+
+### Running it
+
+```bash
+# Dry run: discovers and validates the Asset Generation run, builds the
+# CMSWriteRequest and the Sanity draft payload, writes a local preview —
+# no network request, no Sanity token required.
+npm run growth:cms-write -- \
+  --start 2026-07-08 --end 2026-07-14 --topic-id topic_0219d6e950cc913e --dry-run
+
+# Explicit input instead of discovery:
+npm run growth:cms-write -- \
+  --start 2026-07-08 --end 2026-07-14 \
+  --input growth/assets/asset-generation-2026-07-08_to_2026-07-14-topic_....json --dry-run
+
+# Real Sanity draft write — requires explicit human-review confirmation
+# and full Sanity configuration (see below):
+npm run growth:cms-write -- \
+  --input growth/assets/asset-generation-....json \
+  --write-draft --confirm-reviewed --reviewed-by "Joy"
+
+# Other flags: --review-note "...", --allow-mock-input, --overwrite
+```
+
+Exactly one of `--dry-run` / `--write-draft` is required. `--topic-id` is
+required for automatic discovery only — `--input` bypasses it.
+**There is no `--publish` flag anywhere in this pipeline.**
+
+### Human-review gate
+
+A real Sanity write (`--write-draft`) requires **both**
+`--confirm-reviewed` and a non-empty `--reviewed-by <name>` — neither is
+implied by anything else. `--dry-run` never requires either. These flags
+are recorded in the CMS Writer's own output (never in the source Asset
+Generation JSON, which is never mutated) as approval to create a Sanity
+**draft only** — never approval to publish. Mock Asset Generation input
+(`generation.isMock`) is rejected by `--write-draft` by default;
+`--allow-mock-input` opts in explicitly (recorded prominently in the
+output) and even then only a draft is ever written. An `AssetBundle` that
+fails its own contract validation can never be written, with or without
+any override flag.
+
+### Required environment variables for a real draft write
+
+Reuses the exact variable names `scripts/seed.ts` and `src/lib/sanity.ts`
+already use — nothing new to add to `.env`:
+
+- `PUBLIC_SANITY_PROJECT_ID`
+- `PUBLIC_SANITY_DATASET`
+- `PUBLIC_SANITY_API_VERSION` (optional, defaults to `2024-01-01`)
+- `SANITY_API_TOKEN` — server-side only, never exposed to the browser,
+  never logged, never written to any output file
+
+None of these are required for `--dry-run`.
+
+### Deterministic IDs, draft-only writes, and idempotency
+
+- The canonical document id is `appTool-{slug}` (same convention as
+  `scripts/seed.ts`'s `toDocId()`), but CMS Writer **never writes that
+  id**. The actual Sanity write target is always the draft-prefixed id,
+  `drafts.appTool-{slug}` — Sanity treats any `_id` starting with
+  `drafts.` as an unpublished draft; there is no separate flag.
+- `idempotencyKey` is deterministic from the AssetBundle id, target, and
+  operation — re-running CMS Writer against an unchanged AssetBundle
+  reuses the same `CMSWriteRequest.id`/`idempotencyKey`, so `createOrReplace`
+  is a safe, idempotent re-run rather than an accumulating duplicate.
+- `_key` values for array fields (`screenshots`, `faq`) are deterministic
+  (reusing `growth/lib/ids.ts`'s `deterministicId`), never `randomUUID()`.
+- CMS Writer never calls `.publish()`, never writes the canonical
+  (non-draft) document id, never deletes a document, and never touches any
+  document other than the one it was asked to write.
+
+### Output locations
+
+- Dry-run preview: `growth/cms-output/requests/cms-write-request-{start}_to_{end}-{topic-id}.json`
+  and matching `.md` — collision-safe (timestamp-suffixed unless
+  `--overwrite`), written atomically, never containing a token or an
+  absolute local path.
+- Real draft-write receipt (only after a successful write):
+  `growth/cms-output/receipts/cms-write-receipt-{start}_to_{end}-{topic-id}.json`
+  and matching `.md`. States plainly that a Sanity **draft** was created
+  or replaced, that the public site was **not** modified automatically,
+  and that manual review/publish in Sanity Studio is still required.
+
+Both directories are git-ignored (kept via `.gitkeep`), matching every
+other generated-output folder in `growth/`.
+
+### Common errors
+
+| Error | Cause |
+| --- | --- |
+| `growth:cms-write requires exactly one of --dry-run or --write-draft.` | Neither or both flags were passed. |
+| `growth:cms-write requires --topic-id for automatic discovery ...` | `--topic-id` omitted and `--input` not given. |
+| `--write-draft requires --confirm-reviewed ...` / `--write-draft requires --reviewed-by <name> ...` | The human-review gate wasn't satisfied. |
+| `No Asset Generation run found for ... — run growth:generate-assets for this topic first.` | No matching `asset-generation-*-{topic-id}*.json` in `growth/assets/`. |
+| `... AssetBundle.app.status is "...", CMS Writer only accepts a "draft" AssetBundle.` | The loaded run's AssetBundle isn't a draft (should not happen for a valid Asset Generation output). |
+| `The selected Asset Generation run ("...") was mock-generated ... pass --allow-mock-input to override` | `--write-draft` with mock input and no override. |
+| `--write-draft requires Sanity configuration. Missing: ...` | One or more of `PUBLIC_SANITY_PROJECT_ID`/`PUBLIC_SANITY_DATASET`/`SANITY_API_TOKEN` is unset. |
+| `Sanity rejected the request: authentication failed ...` / `Sanity denied permission ...` / `Sanity project or dataset not found ...` | A real write failed at Sanity's API — sanitized, never includes the token. |
+
+See `growth/cms/README.md` for the full AssetBundle → CMSWriteRequest →
+appTool payload mapping.
 

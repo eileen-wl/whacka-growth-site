@@ -19,7 +19,7 @@ const client =
     ? createClient({ projectId, dataset, apiVersion, useCdn: true })
     : null;
 
-const APP_TOOLS_QUERY = `*[_type == "appTool"] | order(name asc) {
+export const APP_TOOLS_QUERY = `*[_type == "appTool"] | order(name asc) {
   "slug": slug.current,
   name,
   tagline,
@@ -40,7 +40,8 @@ const APP_TOOLS_QUERY = `*[_type == "appTool"] | order(name asc) {
   buildUrl,
   status,
   notes,
-  utmContent
+  utmContent,
+  seo{ title, metaDescription, primaryKeyword, secondaryKeywords }
 }`;
 
 let cachedApps: Promise<AppToolData[]> | null = null;
