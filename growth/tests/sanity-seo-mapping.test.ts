@@ -1,10 +1,29 @@
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { apps } from "../../src/data/apps";
-import { APP_TOOLS_QUERY, getAppBySlug, getApps } from "../../src/lib/sanity";
+import { APP_TOOLS_QUERY } from "../../src/lib/sanity";
 import type { AppData, SeoData } from "../../src/data/apps";
+
+/**
+ * `@sanity/client` is mocked module-wide for this file too — the
+ * "fallback" describe block below must exercise the *fallback* code path
+ * deterministically (no Sanity client configured), never depend on
+ * whatever the real, live Sanity dataset happens to contain right now.
+ * Matches "Mock all Sanity requests. Do not access the real project
+ * during automated tests" from this project's own established testing
+ * policy (see growth/README.md's Sanity draft preview mode section).
+ * `vi.hoisted` is required here (rather than a plain `const` above
+ * `vi.mock`) because this file already has relative imports (e.g.
+ * `../../src/lib/sanity`) before this point — `vi.mock` calls hoist above
+ * all imports, but a plain preceding `const` does not hoist with it,
+ * which previously caused a "Cannot access before initialization" error.
+ */
+const { fetchMock } = vi.hoisted(() => ({ fetchMock: vi.fn() }));
+vi.mock("@sanity/client", () => ({
+  createClient: () => ({ fetch: fetchMock }),
+}));
 
 /**
  * Verifies the SEO persistence gap resolved for step 4 (CMS Writer):
@@ -58,15 +77,32 @@ describe("APP_TOOLS_QUERY (src/lib/sanity.ts)", () => {
 });
 
 describe("getApps()/getAppBySlug() fallback behavior", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    fetchMock.mockReset();
+    // Force the "no Sanity client configured" path deterministically —
+    // never rely on whatever the real, live project/dataset happen to be
+    // set to in .env right now.
+    vi.stubEnv("PUBLIC_SANITY_PROJECT_ID", "");
+    vi.stubEnv("PUBLIC_SANITY_DATASET", "");
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it("falls back to src/data/apps.ts when no Sanity client is configured, with seo left undefined (never an invented empty object)", async () => {
+    const { getApps } = await import("../../src/lib/sanity");
     const result = await getApps();
     expect(result.length).toBeGreaterThan(0);
     for (const app of result) {
       expect(app.seo).toBeUndefined();
     }
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("getAppBySlug still resolves an existing app with no seo field present", async () => {
+    const { getAppBySlug } = await import("../../src/lib/sanity");
     const app = await getAppBySlug(apps[0].slug);
     expect(app).toBeDefined();
     expect(app?.seo).toBeUndefined();

@@ -1837,6 +1837,83 @@ SANITY_PREVIEW_DRAFTS=true   # server-only, default false — see .env.example
   `demoUrl`/`remixUrl` being `null` still resolves to "unavailable" (never
   fabricated); `buildUrl` is unchanged.
 
+### Why a shell-set `SANITY_PREVIEW_DRAFTS=true` didn't work at first, and how it's fixed
+
+Confirmed root cause (from the installed packages' own source, not
+guesswork): Astro's Vite instance sets `envPrefix: "PUBLIC_"`
+(`node_modules/astro/dist/core/create-vite.js`), and Vite's `loadEnv()`
+only ever includes vars matching that prefix
+(`node_modules/vite/dist/node/chunks/dep-*.js`'s `loadEnv` function). Since
+`SANITY_PREVIEW_DRAFTS` and `SANITY_API_TOKEN` are deliberately **not**
+`PUBLIC_`-prefixed (so they're never inlined into a client bundle),
+`import.meta.env` never carries either of them in a real `astro
+dev`/`astro build` run — regardless of whether the value came from the
+shell or from `.env`. A shell-set `$env:SANITY_PREVIEW_DRAFTS="true"`
+therefore never reached `src/lib/sanity.ts` at all, so the site silently
+stayed in normal (published-only) mode: the homepage still showed 5 apps,
+and `/apps/slotsmith` 404'd because `getStaticPaths()` never saw the
+draft.
+
+The fix, in `src/lib/sanity.ts`:
+
+1. `import "dotenv/config";` at the top of the file — populates
+   `process.env` from the root `.env` (the same mechanism every
+   `growth/scripts/*.ts` CLI already uses). `dotenv` never overwrites a
+   value already present in `process.env` (its own documented default),
+   so a shell-set value is always preserved.
+2. `SANITY_PREVIEW_DRAFTS`/`SANITY_API_TOKEN` are now resolved with an
+   explicit, documented precedence: **(1) `process.env`** — always
+   reliable in Node/Astro SSR, unaffected by Vite's `PUBLIC_`-only
+   `envPrefix` filtering, and what a shell-set value actually populates;
+   **(2) `import.meta.env`** — kept as a defensive fallback; **(3)**
+   `false`/unset. `PUBLIC_SANITY_PROJECT_ID`/`PUBLIC_SANITY_DATASET`/
+   `PUBLIC_SANITY_API_VERSION` are unchanged — Astro/Vite already
+   populates those correctly via the `PUBLIC_` prefix.
+3. `SANITY_PREVIEW_DRAFTS` is normalized case-insensitively and trimmed
+   (`" True "`/`"TRUE"` also activate preview mode).
+4. The framework-neutral config/query/dedup logic (previously only
+   reachable through Astro's `import.meta.env`) was extracted into
+   `src/lib/sanity-shared.ts`, which has no dependency on
+   `import.meta.env` at all — this is what makes the read-only diagnostic
+   CLI below possible, and is also what every offline test in
+   `src/lib/sanity-shared.test.ts` exercises directly.
+
+### Diagnostic CLI — verify the real connection, read-only
+
+```bash
+npm run growth:check-sanity-preview -- --preview
+npm run growth:check-sanity-preview -- --published
+```
+
+Reuses the exact same `src/lib/sanity-shared.ts` logic the Astro site
+itself uses (not a reimplementation), so this diagnoses the *actual*
+preview path. Makes exactly one read-only `client.fetch()` call — no
+create/patch/delete method exists anywhere in
+`growth/scripts/check-sanity-preview.ts`. `--preview`/`--published`
+forces the corresponding mode directly (bypassing whatever
+`SANITY_PREVIEW_DRAFTS` is currently set to), so the two runs give a
+clean, direct comparison. Prints only safe fields — booleans, the
+`perspective`/`useCdn` values, non-secret slugs, and counts — **never**
+the token, a full environment dump, or a document body:
+
+```
+Preview mode: true
+Project configured: true
+Dataset configured: true
+Token configured: true
+Perspective: drafts
+useCdn: false
+Raw returned document count: 6
+Returned slugs: orderly, bookly, quotewave, clientflow, cardsnap, slotsmith
+SlotSmith found: yes
+Deduplicated app count: 6
+Read-only — no content was created, modified, or published.
+```
+
+`--published` is expected to show `Perspective: published`, `SlotSmith
+found: no`, and a count of `5` (the draft is invisible under the default
+perspective, exactly as production behaves).
+
 ### Preview indicator
 
 Whenever `SANITY_PREVIEW_DRAFTS=true`, every page (via
@@ -1879,5 +1956,7 @@ for preview mode, and none should be added.
 
 | Error | Cause |
 | --- | --- |
-| `SANITY_PREVIEW_DRAFTS=true requires SANITY_API_TOKEN to be set in .env ...` | Preview mode was requested without a token — set `SANITY_API_TOKEN` or unset `SANITY_PREVIEW_DRAFTS`. |
+| `SANITY_PREVIEW_DRAFTS=true requires SANITY_API_TOKEN to be set ...` | Preview mode was requested without a token — set `SANITY_API_TOKEN` or unset `SANITY_PREVIEW_DRAFTS`. Also the diagnostic CLI's own error for `--preview` without a token. |
+| `growth:check-sanity-preview requires exactly one of --preview or --published.` | Neither or both flags were passed to the diagnostic CLI. |
+| `PUBLIC_SANITY_PROJECT_ID and PUBLIC_SANITY_DATASET must both be set in .env to run this check.` | The diagnostic CLI needs both, in either mode (unlike the token, which `--published` never needs). |
 
