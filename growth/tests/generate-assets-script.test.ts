@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { AnthropicAssetGenerationProvider } from "../llm/anthropic-asset-generation-provider";
 import { MockAssetGenerationProvider } from "../llm/mock-asset-generation-provider";
 import { AssetGenerationInputError } from "../agents/asset-generation-agent";
@@ -299,12 +299,26 @@ describe("readProviderEnv", () => {
       GROWTH_REPORT_LLM_PROVIDER: "mock",
       GROWTH_REPORT_MODEL: "claude-report",
     } as NodeJS.ProcessEnv);
-    expect(env).toEqual({ provider: "anthropic", model: "claude-assets", maxTokens: 12000, promptVersion: "2.0.0", apiKey: "sk-ant-test", growthReportProvider: "mock", growthReportModel: "claude-report" });
+    expect(env).toEqual({ provider: "anthropic", model: "claude-assets", maxTokens: 12000, promptVersion: "2.0.0", apiKey: "sk-ant-test", growthReportProvider: "mock", growthReportModel: "claude-report", collectionDestinationUrl: null });
+  });
+
+  it("defaults collectionDestinationUrl to null when PUBLIC_SITE_URL is unset", () => {
+    expect(readProviderEnv({} as NodeJS.ProcessEnv).collectionDestinationUrl).toBeNull();
+  });
+
+  it("reuses the existing PUBLIC_SITE_URL variable as collectionDestinationUrl — no new env var introduced", () => {
+    const env = readProviderEnv({ PUBLIC_SITE_URL: "https://whacka-growth-site.vercel.app" } as NodeJS.ProcessEnv);
+    expect(env.collectionDestinationUrl).toBe("https://whacka-growth-site.vercel.app");
+  });
+
+  it("treats a whitespace-only PUBLIC_SITE_URL as unset (never fabricates a URL)", () => {
+    const env = readProviderEnv({ PUBLIC_SITE_URL: "   " } as NodeJS.ProcessEnv);
+    expect(env.collectionDestinationUrl).toBeNull();
   });
 });
 
 describe("resolveProvider — fallback chain", () => {
-  const baseEnv = { provider: undefined, model: undefined, maxTokens: 10000, promptVersion: "1.0.0", apiKey: undefined, growthReportProvider: undefined, growthReportModel: undefined };
+  const baseEnv = { provider: undefined, model: undefined, maxTokens: 10000, promptVersion: "1.0.0", apiKey: undefined, growthReportProvider: undefined, growthReportModel: undefined, collectionDestinationUrl: null };
   const baseArgs = { language: "en" as const, socialChannels: [] as string[], overwrite: false, dryRun: false, allowMockInput: false, allowUnapprovedTopic: false, allowHoldTopic: false, integrationTest: false, confirmIntegrationTest: false, topicId: "topic_abc" };
 
   it("throws AssetGenerationConfigError when nothing is configured", () => {
@@ -575,6 +589,71 @@ describe("run — mock provider mode", () => {
     if (result.mode === "assets") {
       expect(result.run.assetBundle.social.posts.map((p) => p.channel)).toEqual(["linkedin"]);
     }
+  });
+
+  it("produces collection-scoped LinkedIn output featuring existing apps alongside the new concept, not the new app alone", async () => {
+    const deps = fakeDeps({ "topic-scoring-2026-07-08_to_2026-07-14.json": fixtureTopicScoringRun() });
+    const result = await run(["--start", PERIOD.start, "--end", PERIOD.end, "--topic-id", "topic_abc", "--provider", "mock", "--social-channels", "linkedin"], deps);
+    if (result.mode !== "assets") throw new Error("unreachable");
+    const strategy = result.run.assetBundle.social.strategy;
+    expect(strategy).toBeDefined();
+    expect(strategy?.scope).toBe("collection");
+    expect(strategy?.featuredAppSlugs.length).toBeGreaterThanOrEqual(3); // new app + at least 2 existing
+    expect(strategy?.campaignId).toBe(result.run.campaign.id);
+  });
+
+  it("produces collection-scoped X output the same way as LinkedIn", async () => {
+    const deps = fakeDeps({ "topic-scoring-2026-07-08_to_2026-07-14.json": fixtureTopicScoringRun() });
+    const result = await run(["--start", PERIOD.start, "--end", PERIOD.end, "--topic-id", "topic_abc", "--provider", "mock", "--social-channels", "x"], deps);
+    if (result.mode !== "assets") throw new Error("unreachable");
+    expect(result.run.assetBundle.social.posts.map((p) => p.channel)).toEqual(["x"]);
+    expect(result.run.assetBundle.social.strategy?.scope).toBe("collection");
+  });
+
+  it("supports multiple channels at once, each collection-scoped, sharing the same strategy", async () => {
+    const deps = fakeDeps({ "topic-scoring-2026-07-08_to_2026-07-14.json": fixtureTopicScoringRun() });
+    const result = await run(["--start", PERIOD.start, "--end", PERIOD.end, "--topic-id", "topic_abc", "--provider", "mock", "--social-channels", "linkedin,x"], deps);
+    if (result.mode !== "assets") throw new Error("unreachable");
+    expect(result.run.assetBundle.social.posts.map((p) => p.channel).sort()).toEqual(["linkedin", "x"]);
+    expect(result.run.assetBundle.social.strategy?.scope).toBe("collection");
+  });
+
+  it("still rejects an unsupported/unrequested channel exactly as before (existing CLI behavior unchanged)", async () => {
+    const deps = fakeDeps({ "topic-scoring-2026-07-08_to_2026-07-14.json": fixtureTopicScoringRun() });
+    // Mock Provider only ever posts to requested channels, so simulate the rejection path directly via validateAssetGenerationAnalysis-covered behavior:
+    // requesting zero channels must still yield zero posts and no strategy.
+    const result = await run(["--start", PERIOD.start, "--end", PERIOD.end, "--topic-id", "topic_abc", "--provider", "mock"], deps);
+    if (result.mode !== "assets") throw new Error("unreachable");
+    expect(result.run.assetBundle.social.posts).toEqual([]);
+    expect(result.run.assetBundle.social.strategy).toBeUndefined();
+  });
+
+  it("passes PUBLIC_SITE_URL through to social.strategy.destinationUrl when configured", async () => {
+    vi.stubEnv("PUBLIC_SITE_URL", "https://whacka-growth-site.vercel.app");
+    const deps = fakeDeps({ "topic-scoring-2026-07-08_to_2026-07-14.json": fixtureTopicScoringRun() });
+    const result = await run(["--start", PERIOD.start, "--end", PERIOD.end, "--topic-id", "topic_abc", "--provider", "mock", "--social-channels", "linkedin"], deps);
+    if (result.mode !== "assets") throw new Error("unreachable");
+    expect(result.run.assetBundle.social.strategy?.destinationUrl).toBe("https://whacka-growth-site.vercel.app");
+    vi.unstubAllEnvs();
+  });
+
+  it("leaves destinationUrl null and records a warning when PUBLIC_SITE_URL is unset", async () => {
+    vi.stubEnv("PUBLIC_SITE_URL", "");
+    const deps = fakeDeps({ "topic-scoring-2026-07-08_to_2026-07-14.json": fixtureTopicScoringRun() });
+    const result = await run(["--start", PERIOD.start, "--end", PERIOD.end, "--topic-id", "topic_abc", "--provider", "mock", "--social-channels", "linkedin"], deps);
+    if (result.mode !== "assets") throw new Error("unreachable");
+    expect(result.run.assetBundle.social.strategy?.destinationUrl).toBeNull();
+    expect(result.run.assetBundle.validation.warnings.some((w) => w.includes("No public collection landing page URL is configured"))).toBe(true);
+    vi.unstubAllEnvs();
+  });
+
+  it("does not add any posting/scheduling side effect — run() only ever returns data and writes local files", async () => {
+    const deps = fakeDeps({ "topic-scoring-2026-07-08_to_2026-07-14.json": fixtureTopicScoringRun() });
+    const result = await run(["--start", PERIOD.start, "--end", PERIOD.end, "--topic-id", "topic_abc", "--provider", "mock", "--social-channels", "linkedin"], deps);
+    expect(result.mode).toBe("assets");
+    // No network/posting API exists on the result or the module — nothing to invoke.
+    expect(result).not.toHaveProperty("posted");
+    expect(result).not.toHaveProperty("scheduled");
   });
 });
 

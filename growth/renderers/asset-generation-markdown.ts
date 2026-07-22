@@ -130,6 +130,22 @@ export function renderAssetGenerationMarkdown(run: FinalAssetGenerationRun): str
   if (bundle.social.posts.length === 0) {
     lines.push("No social channels were requested.", "");
   } else {
+    if (bundle.social.strategy) {
+      const strategy = bundle.social.strategy;
+      lines.push(
+        "> Social content promotes the **collection/campaign**, not this app in isolation — the newly generated app is at most one example.",
+        ""
+      );
+      lines.push(`- **Scope:** ${strategy.scope}`);
+      lines.push(`- **Campaign:** ${strategy.campaignName} (\`${strategy.campaignId}\`)`);
+      lines.push(`- **Featured apps:** ${strategy.featuredAppSlugs.join(", ")}`);
+      lines.push(`- **Destination URL:** ${formatUrl(strategy.destinationUrl)}`);
+      if (strategy.destinationUrl === null) {
+        lines.push("  - ⚠ No public collection landing page URL is configured — do not fabricate a link when sharing this content.");
+      }
+      lines.push(`- **UTM content:** ${strategy.utmContent}`);
+      lines.push("");
+    }
     for (const post of bundle.social.posts) {
       lines.push(`### ${post.channel}`, "", post.text, "");
     }

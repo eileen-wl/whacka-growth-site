@@ -132,6 +132,63 @@ describe("MockAssetGenerationProvider", () => {
     expect(result.data).toHaveProperty("seo");
     expect(result.data).toHaveProperty("cta");
     expect(result.data).toHaveProperty("socialPosts");
+    expect(result.data).toHaveProperty("socialFeaturedExistingAppSlugs");
     expect(result.data).toHaveProperty("generationNotes");
+  });
+
+  it("produces an empty socialFeaturedExistingAppSlugs when zero channels are requested", async () => {
+    const provider = new MockAssetGenerationProvider();
+    const result = await provider.generateStructuredAssets(fixtureRequest({ requestedSocialChannels: [] }));
+    expect(result.data.socialFeaturedExistingAppSlugs).toEqual([]);
+  });
+
+  it("features up to two existing catalog apps when at least one channel is requested", async () => {
+    const provider = new MockAssetGenerationProvider();
+    const catalog = [
+      { name: "Orderly", slug: "orderly", hook: "Order tracker", status: "unknown" },
+      { name: "Bookly", slug: "bookly", hook: "Booking form", status: "unknown" },
+      { name: "QuoteWave", slug: "quotewave", hook: "Quote calculator", status: "unknown" },
+    ];
+    const result = await provider.generateStructuredAssets(
+      fixtureRequest({ requestedSocialChannels: ["linkedin"], context: fixtureContext({ existingAppCatalog: catalog }) })
+    );
+    expect(result.data.socialFeaturedExistingAppSlugs).toEqual(["orderly", "bookly"]);
+  });
+
+  it("features every available existing app when the catalog has fewer than two entries", async () => {
+    const provider = new MockAssetGenerationProvider();
+    const catalog = [{ name: "Orderly", slug: "orderly", hook: "Order tracker", status: "unknown" }];
+    const result = await provider.generateStructuredAssets(
+      fixtureRequest({ requestedSocialChannels: ["linkedin"], context: fixtureContext({ existingAppCatalog: catalog }) })
+    );
+    expect(result.data.socialFeaturedExistingAppSlugs).toEqual(["orderly"]);
+  });
+
+  it("produces collection-level social copy, never a standalone-launch pattern", async () => {
+    const provider = new MockAssetGenerationProvider();
+    const catalog = [
+      { name: "Orderly", slug: "orderly", hook: "Order tracker", status: "unknown" },
+      { name: "Bookly", slug: "bookly", hook: "Booking form", status: "unknown" },
+    ];
+    const result = await provider.generateStructuredAssets(
+      fixtureRequest({ requestedSocialChannels: ["linkedin"], context: fixtureContext({ existingAppCatalog: catalog }) })
+    );
+    const copy = result.data.socialPosts[0].copy.toLowerCase();
+    expect(copy).not.toMatch(/introducing /);
+    expect(copy).not.toMatch(/launching /);
+    expect(copy).toContain("orderly");
+    expect(copy).toContain("bookly");
+  });
+
+  it("its own output passes the full validateAssetGenerationAnalysis collection-scope checks", async () => {
+    const provider = new MockAssetGenerationProvider();
+    const catalog = [
+      { name: "Orderly", slug: "orderly", hook: "Order tracker", status: "unknown" },
+      { name: "Bookly", slug: "bookly", hook: "Booking form", status: "unknown" },
+    ];
+    const request = fixtureRequest({ requestedSocialChannels: ["linkedin", "x"], context: fixtureContext({ existingAppCatalog: catalog, requestedSocialChannels: ["linkedin", "x"] }) });
+    const result = await provider.generateStructuredAssets(request);
+    const { validateAssetGenerationAnalysis } = await import("../agents/asset-generation-agent");
+    expect(() => validateAssetGenerationAnalysis(result.data, ["linkedin", "x"], catalog)).not.toThrow();
   });
 });

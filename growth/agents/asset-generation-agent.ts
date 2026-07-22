@@ -5,7 +5,7 @@ import { validateAssetBundle } from "../contracts/asset-bundle";
 import { buildExistingContentCatalog } from "../signal-sources/existing-content-catalog";
 import { HOMEPAGE_DASHBOARD_URL } from "../../src/lib/utm";
 import type { AssetGenerationProvider } from "../llm/asset-generation-provider";
-import type { AssetApp, AssetBundle, AssetCreativeBrief, AssetCta, AssetGenerationMeta, AssetSeo, AssetSocial, AssetValidation } from "../contracts/asset-bundle";
+import type { AssetApp, AssetBundle, AssetCreativeBrief, AssetCta, AssetGenerationMeta, AssetSeo, AssetSocial, AssetSocialStrategy, AssetValidation } from "../contracts/asset-bundle";
 import type { ScoredTopic } from "../contracts/scored-topic";
 import type { TopicCandidate } from "../contracts/topic-candidate";
 import type { SupportedLanguage } from "../types/llm";
@@ -137,14 +137,66 @@ export function buildAssetGenerationContext(params: BuildAssetGenerationContextP
 // ---------------------------------------------------------------------------
 
 /**
+ * Overclaim phrases banned specifically from social copy (distinct from,
+ * and in addition to, the narrower integration-test-only phrase list in
+ * growth/prompts/asset-generation-prompt.ts) — a mentor decision that social
+ * content must never claim demand is proven/validated or that the concept
+ * is market-leading.
+ */
+const SOCIAL_OVERCLAIM_PHRASES = ["proven demand", "validated opportunity", "confirmed user need", "market-leading", "top-performing product"];
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Deterministic, general (never hardcoded to one specific app name)
+ * detection of standalone-app-launch phrasing in social copy — the exact
+ * pattern the mentor called out: promoting one isolated mini-app on social
+ * media is not meaningful. Built from the actual generated app's own name
+ * every time, so this generalizes across any topic or campaign, never a
+ * single hardcoded app.
+ */
+function containsStandaloneLaunchLanguage(text: string, appName: string): boolean {
+  const trimmedName = appName.trim();
+  if (trimmedName.length === 0) return false;
+  const escapedName = escapeRegExp(trimmedName);
+  const patterns = [
+    new RegExp(`\\bintroducing\\s+${escapedName}\\b`, "i"),
+    new RegExp(`\\blaunching\\s+${escapedName}\\b`, "i"),
+    new RegExp(`\\btry\\s+our\\s+new\\s+${escapedName}\\b`, "i"),
+    new RegExp(`\\b${escapedName}\\s+is\\s+the\\s+solution\\b`, "i"),
+    /\bbuild\s+this\s+one\s+app\s+now\b/i,
+  ];
+  return patterns.some((pattern) => pattern.test(text));
+}
+
+function containsSocialOverclaim(text: string): boolean {
+  const lower = text.toLowerCase();
+  return SOCIAL_OVERCLAIM_PHRASES.some((phrase) => lower.includes(phrase));
+}
+
+/**
  * Validates a provider's raw response before it's trusted downstream: (1)
  * the static Zod schema (re-checked for every provider, since the Mock
  * Provider skips the Anthropic SDK's own client-side parsing); (2) every
  * generated social post's channel must be one of the explicitly requested
  * channels — a request for zero channels means zero posts are valid, since
- * an empty allowed-set rejects any post outright.
+ * an empty allowed-set rejects any post outright; (3) social copy must
+ * never read as a standalone single-app launch or make an unsupported
+ * demand/market claim; (4) every featured existing-app slug must be real;
+ * (5) when social channels were requested and the existing catalog has
+ * entries, at least `min(2, catalog size)` distinct existing apps must be
+ * featured — the selected app is never the sole featured subject when
+ * other collection apps are available. A violation always throws a clear
+ * validation error for regeneration — this function never silently rewrites
+ * the model's copy.
  */
-export function validateAssetGenerationAnalysis(rawData: unknown, requestedSocialChannels: string[]): AssetGenerationAnalysis {
+export function validateAssetGenerationAnalysis(
+  rawData: unknown,
+  requestedSocialChannels: string[],
+  existingAppCatalog: AssetGenerationExistingAppCatalogEntry[] = []
+): AssetGenerationAnalysis {
   const parsed = assetGenerationAnalysisSchema.safeParse(rawData);
   if (!parsed.success) {
     const issues = parsed.error.issues.slice(0, 5).map((issue) => `${issue.path.join(".") || "(root)"}: ${issue.message}`);
@@ -159,6 +211,36 @@ export function validateAssetGenerationAnalysis(rawData: unknown, requestedSocia
         `Model generated a social post for channel "${post.channel}", which was not requested. Requested channels: ${
           requestedSocialChannels.join(", ") || "(none)"
         }.`
+      );
+    }
+    if (containsStandaloneLaunchLanguage(post.copy, analysis.appConcept.name)) {
+      throw new AssetGenerationValidationError(
+        `Social post for channel "${post.channel}" uses standalone-app-launch language (e.g. "Introducing ${analysis.appConcept.name}", ` +
+          `"Launching ${analysis.appConcept.name}") — social content must promote the collection/campaign, never present one isolated app as a launch.`
+      );
+    }
+    if (containsSocialOverclaim(post.copy)) {
+      throw new AssetGenerationValidationError(
+        `Social post for channel "${post.channel}" makes an unsupported claim (proven/validated demand, market-leading, or similar) — not allowed in generated content.`
+      );
+    }
+  }
+
+  const existingSlugSet = new Set(existingAppCatalog.map((entry) => entry.slug));
+  for (const slug of analysis.socialFeaturedExistingAppSlugs) {
+    if (!existingSlugSet.has(slug)) {
+      throw new AssetGenerationValidationError(
+        `Model's socialFeaturedExistingAppSlugs references "${slug}", which is not in the supplied existing-app catalog.`
+      );
+    }
+  }
+  if (requestedSocialChannels.length > 0) {
+    const requiredExistingCount = Math.min(2, existingAppCatalog.length);
+    const distinctFeatured = new Set(analysis.socialFeaturedExistingAppSlugs);
+    if (distinctFeatured.size < requiredExistingCount) {
+      throw new AssetGenerationValidationError(
+        `Social content must feature at least ${requiredExistingCount} existing app(s) from the catalog alongside the new concept — the ` +
+          `selected app must never be the sole featured subject when other collection apps are available (got ${distinctFeatured.size}).`
       );
     }
   }
@@ -399,6 +481,63 @@ export interface AssembleAssetBundleParams {
   allowHoldTopicUsed: boolean;
   /** True only for a run produced under the explicit `--integration-test` engineering override. Optional/defaults to false so existing callers are unaffected. */
   integrationTestActive?: boolean;
+  /**
+   * The public collection/campaign landing page URL (see `PUBLIC_SITE_URL`
+   * in .env.example) — never an app-specific URL, never the Whacka
+   * dashboard. `null`/omitted when not configured; never fabricated. Only
+   * consulted when at least one social post exists.
+   */
+  collectionDestinationUrl?: string | null;
+}
+
+const COLLECTION_URL_NOT_CONFIGURED_WARNING =
+  "No public collection landing page URL is configured (PUBLIC_SITE_URL) — social destinationUrl is null. Do not fabricate a link when sharing this content.";
+
+export interface BuildSocialStrategyParams {
+  analysis: AssetGenerationAnalysis;
+  context: AssetGenerationContext;
+  finalSlug: string;
+  campaignId: string;
+  destinationUrl: string | null;
+  cta: AssetCta;
+}
+
+/**
+ * Deterministically assembles the collection-level social strategy — never
+ * trusted from the model, the same precedent already established for CTA
+ * URLs/UTM. `featuredAppSlugs` always includes the new app's own final slug
+ * (never omitted) plus whichever existing-app slugs the model chose and
+ * validation already confirmed are real — so the new app is present but
+ * never the sole subject. Throws (never silently corrects) if the supplied
+ * `destinationUrl` would collide with the Whacka dashboard or the app's own
+ * demo/remix/build URL — this should never happen given `destinationUrl`
+ * only ever comes from the public site configuration, but a collision would
+ * silently defeat the entire "promote the collection, not one app" goal, so
+ * it is asserted defensively rather than assumed.
+ */
+export function buildSocialStrategy(params: BuildSocialStrategyParams): AssetSocialStrategy {
+  if (params.destinationUrl !== null) {
+    if (params.destinationUrl === HOMEPAGE_DASHBOARD_URL) {
+      throw new AssetGenerationValidationError("Internal error: the collection social destinationUrl must never be the Whacka dashboard URL.");
+    }
+    const appUrls = [params.cta.demoUrl, params.cta.remixUrl, params.cta.buildUrl].filter((url): url is string => url !== null);
+    if (appUrls.includes(params.destinationUrl)) {
+      throw new AssetGenerationValidationError(
+        "Internal error: the collection social destinationUrl must never equal the selected app's own demo/remix/build URL."
+      );
+    }
+  }
+
+  const featuredAppSlugs = dedupe([params.finalSlug, ...params.analysis.socialFeaturedExistingAppSlugs]);
+
+  return {
+    scope: "collection",
+    campaignId: params.campaignId,
+    campaignName: params.context.campaign.name,
+    featuredAppSlugs,
+    destinationUrl: params.destinationUrl,
+    utmContent: truncate(`collection_${params.campaignId}`, 160),
+  };
 }
 
 /**
@@ -448,7 +587,19 @@ export function assembleAssetBundle(params: AssembleAssetBundleParams): AssetBun
     secondaryKeywords: analysis.seo.secondaryKeywords,
   };
 
-  const social: AssetSocial = { posts: analysis.socialPosts.map((post) => ({ channel: post.channel, text: post.copy })) };
+  const socialPosts = analysis.socialPosts.map((post) => ({ channel: post.channel, text: post.copy }));
+  const socialStrategy: AssetSocialStrategy | undefined =
+    socialPosts.length > 0
+      ? buildSocialStrategy({
+          analysis,
+          context,
+          finalSlug: params.finalSlug,
+          campaignId: params.campaignId,
+          destinationUrl: params.collectionDestinationUrl ?? null,
+          cta,
+        })
+      : undefined;
+  const social: AssetSocial = socialStrategy ? { posts: socialPosts, strategy: socialStrategy } : { posts: socialPosts };
 
   const hasAssumptionsOrLimitations =
     analysis.appConcept.creativeBrief.assumptions.length +
@@ -500,6 +651,7 @@ export function assembleAssetBundle(params: AssembleAssetBundleParams): AssetBun
           ),
         ]
       : []),
+    ...(socialStrategy && socialStrategy.destinationUrl === null ? [COLLECTION_URL_NOT_CONFIGURED_WARNING] : []),
     ...prefixedList("Assumption", dedupedAssumptions),
     ...prefixedList("Limitation", dedupedLimitations),
     truncate(`Topic alignment: ${analysis.generationNotes.topicAlignment}`, 500),
@@ -586,6 +738,12 @@ export interface RunAssetGenerationAgentParams {
    * already fully validated the override.
    */
   integrationTest?: { reviewedBy: string; reviewNote: string | null };
+  /**
+   * The public collection/campaign landing page URL (see `PUBLIC_SITE_URL`
+   * in .env.example) — never fabricated when unset. Only consulted when at
+   * least one social channel was requested.
+   */
+  collectionDestinationUrl?: string | null;
   /** Injectable for deterministic tests; defaults to the current time. */
   generatedAt?: string;
 }
@@ -627,7 +785,7 @@ export async function runAssetGenerationAgent(params: RunAssetGenerationAgentPar
   });
 
   const result = await params.provider.generateStructuredAssets(request);
-  const analysis = validateAssetGenerationAnalysis(result.data, params.requestedSocialChannels);
+  const analysis = validateAssetGenerationAnalysis(result.data, params.requestedSocialChannels, existingAppCatalog);
 
   const isMock = params.provider.name === "mock";
   const existingSlugs = new Set(existingAppCatalog.map((entry) => entry.slug));
@@ -646,6 +804,7 @@ export async function runAssetGenerationAgent(params: RunAssetGenerationAgentPar
     allowUnapprovedTopicUsed: params.allowUnapprovedTopicUsed,
     allowHoldTopicUsed: params.allowHoldTopicUsed,
     integrationTestActive,
+    collectionDestinationUrl: params.collectionDestinationUrl,
   });
 
   const integrationTestReview: AssetGenerationIntegrationTestReview | null = params.integrationTest

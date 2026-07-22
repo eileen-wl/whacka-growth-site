@@ -2,11 +2,12 @@ import { describe, expect, it } from "vitest";
 import {
   AssetBundleValidationError,
   ScoredTopicToAssetBundleValidationError,
+  assetSocialStrategySchema,
   buildAssetBundleId,
   validateAssetBundle,
   validateScoredTopicForAssetGeneration,
 } from "../contracts/asset-bundle";
-import type { AssetBundle } from "../contracts/asset-bundle";
+import type { AssetBundle, AssetSocialStrategy } from "../contracts/asset-bundle";
 import { computeTotalScore, computeWeightedScore } from "../contracts/scored-topic";
 import type { ScoredTopic } from "../contracts/scored-topic";
 
@@ -142,6 +143,77 @@ describe("assetBundleSchema", () => {
 
   it("throws on an unsupported major schema version", () => {
     expect(() => validateAssetBundle(fixtureAssetBundle({ schemaVersion: "2.0.0" }))).toThrow();
+  });
+
+  it("accepts a bundle with social.strategy present (collection scope)", () => {
+    const strategy: AssetSocialStrategy = {
+      scope: "collection",
+      campaignId: "small_business_toolkit_v0",
+      campaignName: "Small Business Mini App Toolkit",
+      featuredAppSlugs: ["stocktrack", "orderly", "bookly"],
+      destinationUrl: "https://whacka-growth-site.vercel.app",
+      utmContent: "collection_small_business_toolkit_v0",
+    };
+    const bundle = fixtureAssetBundle({ social: { posts: [{ channel: "linkedin", text: "Toolkit post." }], strategy } });
+    expect(() => validateAssetBundle(bundle)).not.toThrow();
+  });
+
+  it("accepts a bundle with social.strategy omitted (old-file backward compatibility)", () => {
+    const bundle = fixtureAssetBundle({ social: { posts: [] } });
+    expect(() => validateAssetBundle(bundle)).not.toThrow();
+  });
+
+  it("accepts a null destinationUrl on social.strategy", () => {
+    const strategy: AssetSocialStrategy = {
+      scope: "collection",
+      campaignId: "small_business_toolkit_v0",
+      campaignName: "Small Business Mini App Toolkit",
+      featuredAppSlugs: ["stocktrack", "orderly"],
+      destinationUrl: null,
+      utmContent: "collection_small_business_toolkit_v0",
+    };
+    const bundle = fixtureAssetBundle({ social: { posts: [{ channel: "x", text: "Toolkit post." }], strategy } });
+    expect(() => validateAssetBundle(bundle)).not.toThrow();
+  });
+});
+
+describe("assetSocialStrategySchema", () => {
+  const base: AssetSocialStrategy = {
+    scope: "collection",
+    campaignId: "small_business_toolkit_v0",
+    campaignName: "Small Business Mini App Toolkit",
+    featuredAppSlugs: ["stocktrack", "orderly"],
+    destinationUrl: null,
+    utmContent: "collection_small_business_toolkit_v0",
+  };
+
+  it("accepts a well-formed strategy", () => {
+    expect(assetSocialStrategySchema.safeParse(base).success).toBe(true);
+  });
+
+  it("rejects a scope other than 'collection'", () => {
+    expect(assetSocialStrategySchema.safeParse({ ...base, scope: "standalone" }).success).toBe(false);
+  });
+
+  it("requires at least one featured app slug", () => {
+    expect(assetSocialStrategySchema.safeParse({ ...base, featuredAppSlugs: [] }).success).toBe(false);
+  });
+
+  it("rejects a non-kebab-case featured app slug", () => {
+    expect(assetSocialStrategySchema.safeParse({ ...base, featuredAppSlugs: ["Stock Track"] }).success).toBe(false);
+  });
+
+  it("rejects an empty campaignId or campaignName", () => {
+    expect(assetSocialStrategySchema.safeParse({ ...base, campaignId: "" }).success).toBe(false);
+    expect(assetSocialStrategySchema.safeParse({ ...base, campaignName: "" }).success).toBe(false);
+  });
+
+  it("accepts a real https destinationUrl", () => {
+    expect(assetSocialStrategySchema.safeParse({ ...base, destinationUrl: "https://whacka-growth-site.vercel.app" }).success).toBe(true);
+  });
+
+  it("rejects a placeholder-looking non-URL destinationUrl", () => {
+    expect(assetSocialStrategySchema.safeParse({ ...base, destinationUrl: "coming-soon" }).success).toBe(false);
   });
 });
 

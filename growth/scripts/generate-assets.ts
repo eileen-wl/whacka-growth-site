@@ -200,6 +200,15 @@ export interface ProviderEnvConfig {
   apiKey: string | undefined;
   growthReportProvider: string | undefined;
   growthReportModel: string | undefined;
+  /**
+   * The public collection/campaign landing page URL social content should
+   * point to — reuses the site's existing `PUBLIC_SITE_URL` (already
+   * documented in .env.example for astro.config.mjs/sitemap/canonical
+   * links) rather than introducing a new variable, since this single-
+   * campaign site's homepage already is the collection landing page. `null`
+   * when unset — never fabricated.
+   */
+  collectionDestinationUrl: string | null;
 }
 
 export function readProviderEnv(source: NodeJS.ProcessEnv = process.env): ProviderEnvConfig {
@@ -208,6 +217,7 @@ export function readProviderEnv(source: NodeJS.ProcessEnv = process.env): Provid
   const promptVersion = source.ASSET_GENERATION_PROMPT_VERSION && source.ASSET_GENERATION_PROMPT_VERSION.trim().length > 0
     ? source.ASSET_GENERATION_PROMPT_VERSION
     : DEFAULT_PROMPT_VERSION;
+  const collectionDestinationUrl = source.PUBLIC_SITE_URL && source.PUBLIC_SITE_URL.trim().length > 0 ? source.PUBLIC_SITE_URL.trim() : null;
 
   return {
     provider: source.ASSET_GENERATION_LLM_PROVIDER,
@@ -217,6 +227,7 @@ export function readProviderEnv(source: NodeJS.ProcessEnv = process.env): Provid
     apiKey: source.ANTHROPIC_API_KEY,
     growthReportProvider: source.GROWTH_REPORT_LLM_PROVIDER,
     growthReportModel: source.GROWTH_REPORT_MODEL,
+    collectionDestinationUrl,
   };
 }
 
@@ -642,6 +653,7 @@ export async function run(argv: string[], deps: FileSystemDeps = defaultDeps): P
     allowUnapprovedTopicUsed: args.allowUnapprovedTopic,
     allowHoldTopicUsed: args.allowHoldTopic,
     integrationTest: integrationTestGate.active ? { reviewedBy: integrationTestGate.reviewedBy as string, reviewNote: integrationTestGate.reviewNote } : undefined,
+    collectionDestinationUrl: env.collectionDestinationUrl,
   });
 
   const jsonPath = resolveRunJsonPath(period, topicId, args.overwrite, deps.exists, undefined, integrationTestGate.active);

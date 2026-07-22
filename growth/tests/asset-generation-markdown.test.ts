@@ -190,6 +190,54 @@ describe("renderAssetGenerationMarkdown", () => {
     expect(md).toContain("Proposed concept: Inventory Tracker.");
   });
 
+  it("shows the collection social strategy — scope, campaign, featured apps, destination — prominently, distinct from this one app", () => {
+    const bundle = {
+      ...fixtureAssetBundle(),
+      social: {
+        posts: [{ channel: "linkedin", text: "This toolkit includes several small-business ideas." }],
+        strategy: {
+          scope: "collection" as const,
+          campaignId: CAMPAIGN.id,
+          campaignName: CAMPAIGN.name,
+          featuredAppSlugs: ["inventory-tracker", "orderly", "bookly"],
+          destinationUrl: "https://whacka-growth-site.vercel.app",
+          utmContent: `collection_${CAMPAIGN.id}`,
+        },
+      },
+    };
+    const md = renderAssetGenerationMarkdown(fixtureRun({ assetBundle: bundle }));
+    expect(md).toContain("promotes the **collection/campaign**");
+    expect(md).toContain("**Scope:** collection");
+    expect(md).toContain("orderly");
+    expect(md).toContain("bookly");
+    expect(md).toContain("https://whacka-growth-site.vercel.app");
+  });
+
+  it("shows a not-configured warning when destinationUrl is null", () => {
+    const bundle = {
+      ...fixtureAssetBundle(),
+      social: {
+        posts: [{ channel: "linkedin", text: "This toolkit includes several small-business ideas." }],
+        strategy: {
+          scope: "collection" as const,
+          campaignId: CAMPAIGN.id,
+          campaignName: CAMPAIGN.name,
+          featuredAppSlugs: ["inventory-tracker", "orderly", "bookly"],
+          destinationUrl: null,
+          utmContent: `collection_${CAMPAIGN.id}`,
+        },
+      },
+    };
+    const md = renderAssetGenerationMarkdown(fixtureRun({ assetBundle: bundle }));
+    expect(md).toContain("No public collection landing page URL is configured");
+  });
+
+  it("does not render a strategy section when social.strategy is absent (zero posts)", () => {
+    const bundle = { ...fixtureAssetBundle(), social: { posts: [] } };
+    const md = renderAssetGenerationMarkdown(fixtureRun({ assetBundle: bundle }));
+    expect(md).not.toContain("**Scope:** collection");
+  });
+
   it("shows a mock-generation warning prominently", () => {
     const md = renderAssetGenerationMarkdown(fixtureRun());
     expect(md).toContain("Mock Provider");

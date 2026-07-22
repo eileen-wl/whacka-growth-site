@@ -88,11 +88,19 @@ export class MockAssetGenerationProvider implements AssetGenerationProvider {
         },
         rationale: truncate(`"${primaryType}" was selected deterministically from the supplied allowed CTA types. ${MOCK_CAVEAT}`, 440),
       },
-      socialPosts: request.requestedSocialChannels.map((channel) => ({
-        channel,
-        variant: "concept-announcement",
-        copy: truncate(`Proposed concept: ${name}. ${context.desiredOutcome} ${MOCK_CAVEAT}`, 2000),
-      })),
+      socialPosts: request.requestedSocialChannels.map((channel) => {
+        const featuredExistingNames = context.existingAppCatalog.slice(0, 2).map((entry) => entry.name);
+        const toolkitLine =
+          featuredExistingNames.length > 0
+            ? `This toolkit already includes ideas like ${featuredExistingNames.join(" and ")} — and we're exploring a new concept too: ${name}.`
+            : `We're exploring a new concept: ${name}.`;
+        return {
+          channel,
+          variant: "collection-toolkit",
+          copy: truncate(`Small business owners juggle a lot day to day. ${toolkitLine} ${MOCK_CAVEAT}`, 2000),
+        };
+      }),
+      socialFeaturedExistingAppSlugs: request.requestedSocialChannels.length > 0 ? context.existingAppCatalog.slice(0, 2).map((entry) => entry.slug) : [],
       generationNotes: {
         topicAlignment: truncate(`This concept directly addresses "${context.problemStatement}" as stated in the selected topic. ${MOCK_CAVEAT}`, 440),
         differentiationFromExistingApps: truncate(

@@ -136,12 +136,25 @@ const generationNotesSchema = z.strictObject({
 
 export type GenerationNotes = z.infer<typeof generationNotesSchema>;
 
+/**
+ * Existing-app-catalog slugs the model chose to feature alongside the new
+ * concept in collection-level social content — never the new app's own
+ * slug (that's always included afterward, deterministically, since the
+ * model only knows its own `slugSuggestion`, not the final resolved slug).
+ * Empty when zero social channels were requested. Validated afterward
+ * (growth/agents/asset-generation-agent.ts) against the real supplied
+ * existing-app catalog — an unknown slug is rejected, never silently
+ * dropped.
+ */
+const socialFeaturedExistingAppSlugsSchema = z.array(z.string().min(1).max(200)).max(10);
+
 /** The model-generated portion of a run. See growth/agents/asset-generation-agent.ts for the cross-referential rules (requested social channels, allowed CTA types) layered on top. */
 export const assetGenerationAnalysisSchema = z.strictObject({
   appConcept: appConceptSchema,
   seo: seoInputSchema,
   cta: ctaInputSchema,
   socialPosts: z.array(socialPostInputSchema).max(20),
+  socialFeaturedExistingAppSlugs: socialFeaturedExistingAppSlugsSchema,
   generationNotes: generationNotesSchema,
 });
 

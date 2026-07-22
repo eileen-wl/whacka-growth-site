@@ -83,6 +83,49 @@ describe("REPORTING_RULES", () => {
     expect(joined).toContain("seo.title to at most 60 characters");
     expect(joined).toContain("seo.metadescription to at most 160 characters");
   });
+
+  it("requires collection/campaign-level social content by default", () => {
+    const joined = REPORTING_RULES.join(" ").toLowerCase();
+    expect(joined).toContain("collection/campaign-level promotion");
+    expect(joined).toContain("promoting one isolated mini-app on social media is not meaningful");
+  });
+
+  it("prohibits standalone-app-launch positioning in social copy", () => {
+    const joined = REPORTING_RULES.join(" ").toLowerCase();
+    expect(joined).toContain("standalone product launch");
+    expect(joined).toContain("introducing <appname>");
+    expect(joined).toContain("launching <appname>");
+    expect(joined).toContain("build this one app now");
+  });
+
+  it("requires the selected app to be only one example, never the sole subject", () => {
+    const joined = REPORTING_RULES.join(" ").toLowerCase();
+    expect(joined).toContain("it must never be the sole subject");
+  });
+
+  it("requires a collection call to action, never claiming a working link when none is supplied", () => {
+    const joined = REPORTING_RULES.join(" ").toLowerCase();
+    expect(joined).toContain("a url is never supplied by you and must never be claimed to work");
+  });
+
+  it("bans social overclaim phrases distinct from (but overlapping) the integration-test list", () => {
+    const joined = REPORTING_RULES.join(" ").toLowerCase();
+    for (const phrase of ["proven demand", "validated opportunity", "confirmed user need", "market-leading", "top-performing product"]) {
+      expect(joined).toContain(phrase);
+    }
+  });
+
+  it("requires socialFeaturedExistingAppSlugs to come only from the existing catalog, with a minimum of two when available", () => {
+    const joined = REPORTING_RULES.join(" ").toLowerCase();
+    expect(joined).toContain("socialfeaturedexistingappslugs must list only slugs taken from the supplied existing-app catalog");
+    expect(joined).toContain("feature at least two of them");
+  });
+
+  it("distinguishes already-live existing apps from the new, not-yet-published concept", () => {
+    const joined = REPORTING_RULES.join(" ").toLowerCase();
+    expect(joined).toContain("already live and viewable on the site");
+    expect(joined).toContain("do not imply the new concept is already publicly available");
+  });
 });
 
 describe("buildReportingRules / buildSystemPrompt", () => {
@@ -221,6 +264,19 @@ describe("buildAssetGenerationLLMRequest", () => {
       maxTokens: 10000,
     });
     expect(request.reportingRules.at(-1)).toContain("Simplified Chinese");
+  });
+
+  it("describes socialFeaturedExistingAppSlugs in the response schema description", () => {
+    const request = buildAssetGenerationLLMRequest({
+      campaign: CAMPAIGN,
+      period: PERIOD,
+      language: "en",
+      context: fixtureContext(),
+      allowedCtaTypes: ["view_demo", "remix", "build", "copy_prompt"],
+      requestedSocialChannels: ["linkedin"],
+      maxTokens: 10000,
+    });
+    expect(request.responseSchemaDescription).toContain("socialFeaturedExistingAppSlugs");
   });
 
   it("threads integrationTest: true into both the system prompt and reportingRules, and still requests the full response schema", () => {

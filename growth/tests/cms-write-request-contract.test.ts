@@ -117,6 +117,30 @@ describe("buildCmsWriteRequest", () => {
       secondaryKeywords: [],
     });
   });
+
+  it("never includes social posts or the collection-level social strategy in the appTool payload, even when the source AssetBundle has them", () => {
+    const bundle = fixtureAssetBundle({
+      social: {
+        posts: [{ channel: "linkedin", text: "This toolkit includes several small-business ideas." }],
+        strategy: {
+          scope: "collection",
+          campaignId: "test_campaign",
+          campaignName: "Test Campaign",
+          featuredAppSlugs: ["stocktrack", "orderly", "bookly"],
+          destinationUrl: "https://whacka-growth-site.vercel.app",
+          utmContent: "collection_test_campaign",
+        },
+      },
+    });
+    const request = buildCmsWriteRequest(bundle, { generatedBy: "cms-writer" });
+    const payloadKeys = Object.keys(request.payload);
+    expect(payloadKeys).not.toContain("social");
+    expect(payloadKeys).not.toContain("socialPosts");
+    expect(payloadKeys).not.toContain("strategy");
+    expect(payloadKeys).not.toContain("featuredAppSlugs");
+    expect(JSON.stringify(request.payload).toLowerCase()).not.toContain("collection");
+    expect(JSON.stringify(request.payload).toLowerCase()).not.toContain("linkedin");
+  });
 });
 
 describe("cmsWriteRequestSchema", () => {

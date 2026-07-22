@@ -7,6 +7,7 @@ import {
   buildAssetGenerationContext,
   buildExistingAppCatalog,
   buildFinalAssetBundleId,
+  buildSocialStrategy,
   computeValidationStatus,
   dedupeNearIdenticalText,
   resolveCtaAndUrls,
@@ -15,8 +16,9 @@ import {
   runAssetGenerationAgent,
   validateAssetGenerationAnalysis,
 } from "../agents/asset-generation-agent";
+import { HOMEPAGE_DASHBOARD_URL } from "../../src/lib/utm";
 import type { AssetGenerationProvider } from "../llm/asset-generation-provider";
-import type { AssetGenerationAnalysis } from "../types/asset-generation";
+import type { AssetGenerationAnalysis, AssetGenerationExistingAppCatalogEntry } from "../types/asset-generation";
 import type { ScoringDimensionKey } from "../types/topic-scoring";
 import type { FinalTopicScoringRun } from "../types/topic-scoring";
 import type { LLMStructuredResult } from "../types/llm";
@@ -136,6 +138,7 @@ function fixtureAnalysis(overrides: Partial<AssetGenerationAnalysis> = {}): Asse
       rationale: "Build is the safest, always-available CTA.",
     },
     socialPosts: [],
+    socialFeaturedExistingAppSlugs: [],
     generationNotes: { topicAlignment: "Directly addresses the stated problem.", differentiationFromExistingApps: "No existing app covers this.", assumptions: [], limitations: [], requiresHumanReview: true },
     ...overrides,
   };
@@ -243,6 +246,92 @@ describe("validateAssetGenerationAnalysis", () => {
     // @ts-expect-error intentional malformed input
     delete raw.appConcept.appPrompt;
     expect(() => validateAssetGenerationAnalysis(raw, [])).toThrow(AssetGenerationValidationError);
+  });
+});
+
+describe("validateAssetGenerationAnalysis — collection-scoped social content", () => {
+  const CATALOG: AssetGenerationExistingAppCatalogEntry[] = [
+    { name: "Orderly", slug: "orderly", hook: "Order tracker", status: "unknown" },
+    { name: "Bookly", slug: "bookly", hook: "Booking form", status: "unknown" },
+    { name: "QuoteWave", slug: "quotewave", hook: "Quote calculator", status: "unknown" },
+  ];
+
+  function socialAnalysis(overrides: Partial<AssetGenerationAnalysis> = {}): AssetGenerationAnalysis {
+    return fixtureAnalysis({
+      socialPosts: [{ channel: "linkedin", variant: "toolkit", copy: "Small business owners juggle a lot — here's a useful toolkit of ideas, including Inventory Tracker." }],
+      socialFeaturedExistingAppSlugs: ["orderly", "bookly"],
+      ...overrides,
+    });
+  }
+
+  it("accepts collection-level copy featuring >= 2 existing apps when the catalog has >= 2 and a channel is requested", () => {
+    expect(() => validateAssetGenerationAnalysis(socialAnalysis(), ["linkedin"], CATALOG)).not.toThrow();
+  });
+
+  it("rejects standalone-launch language ('Introducing <AppName>')", () => {
+    const analysis = socialAnalysis({ socialPosts: [{ channel: "linkedin", variant: "toolkit", copy: "Introducing Inventory Tracker — the app you've been waiting for!" }] });
+    expect(() => validateAssetGenerationAnalysis(analysis, ["linkedin"], CATALOG)).toThrow(AssetGenerationValidationError);
+  });
+
+  it("rejects standalone-launch language ('Launching <AppName>')", () => {
+    const analysis = socialAnalysis({ socialPosts: [{ channel: "linkedin", variant: "toolkit", copy: "Launching Inventory Tracker today for small businesses everywhere." }] });
+    expect(() => validateAssetGenerationAnalysis(analysis, ["linkedin"], CATALOG)).toThrow(AssetGenerationValidationError);
+  });
+
+  it("rejects standalone-launch language ('X is the solution')", () => {
+    const analysis = socialAnalysis({ socialPosts: [{ channel: "linkedin", variant: "toolkit", copy: "Inventory Tracker is the solution small shops need." }] });
+    expect(() => validateAssetGenerationAnalysis(analysis, ["linkedin"], CATALOG)).toThrow(AssetGenerationValidationError);
+  });
+
+  it("rejects the generic 'build this one app now' pattern regardless of app name", () => {
+    const analysis = socialAnalysis({ socialPosts: [{ channel: "linkedin", variant: "toolkit", copy: "Stop juggling spreadsheets — build this one app now and get organized." }] });
+    expect(() => validateAssetGenerationAnalysis(analysis, ["linkedin"], CATALOG)).toThrow(AssetGenerationValidationError);
+  });
+
+  it("does not false-positive on ordinary collection copy that just happens to mention the app name", () => {
+    const analysis = socialAnalysis({
+      socialPosts: [{ channel: "linkedin", variant: "toolkit", copy: "This toolkit includes ideas like Orderly and Bookly, and a new concept we're exploring: Inventory Tracker." }],
+    });
+    expect(() => validateAssetGenerationAnalysis(analysis, ["linkedin"], CATALOG)).not.toThrow();
+  });
+
+  it.each(["proven demand", "validated opportunity", "confirmed user need", "market-leading", "top-performing product"])(
+    "rejects the overclaim phrase %j",
+    (phrase) => {
+      const analysis = socialAnalysis({ socialPosts: [{ channel: "linkedin", variant: "toolkit", copy: `This toolkit reflects ${phrase} across small businesses.` }] });
+      expect(() => validateAssetGenerationAnalysis(analysis, ["linkedin"], CATALOG)).toThrow(AssetGenerationValidationError);
+    }
+  );
+
+  it("rejects a featured slug that does not exist in the supplied existing-app catalog", () => {
+    const analysis = socialAnalysis({ socialFeaturedExistingAppSlugs: ["orderly", "not-a-real-app"] });
+    expect(() => validateAssetGenerationAnalysis(analysis, ["linkedin"], CATALOG)).toThrow(AssetGenerationValidationError);
+  });
+
+  it("rejects fewer than 2 featured existing apps when the catalog has >= 2 and a channel is requested", () => {
+    const analysis = socialAnalysis({ socialFeaturedExistingAppSlugs: ["orderly"] });
+    expect(() => validateAssetGenerationAnalysis(analysis, ["linkedin"], CATALOG)).toThrow(AssetGenerationValidationError);
+  });
+
+  it("rejects zero featured existing apps (the selected app as sole subject) when the catalog has >= 2 and a channel is requested", () => {
+    const analysis = socialAnalysis({ socialFeaturedExistingAppSlugs: [] });
+    expect(() => validateAssetGenerationAnalysis(analysis, ["linkedin"], CATALOG)).toThrow(AssetGenerationValidationError);
+  });
+
+  it("does not require any featured existing app when zero social channels were requested, even with a rich catalog", () => {
+    const analysis = fixtureAnalysis({ socialPosts: [], socialFeaturedExistingAppSlugs: [] });
+    expect(() => validateAssetGenerationAnalysis(analysis, [], CATALOG)).not.toThrow();
+  });
+
+  it("relaxes the '>= 2' requirement to the catalog's actual size when fewer than 2 existing apps exist", () => {
+    const oneAppCatalog = CATALOG.slice(0, 1);
+    const analysis = socialAnalysis({ socialFeaturedExistingAppSlugs: ["orderly"] });
+    expect(() => validateAssetGenerationAnalysis(analysis, ["linkedin"], oneAppCatalog)).not.toThrow();
+  });
+
+  it("does not require any featured existing app when the catalog is entirely empty", () => {
+    const analysis = socialAnalysis({ socialFeaturedExistingAppSlugs: [] });
+    expect(() => validateAssetGenerationAnalysis(analysis, ["linkedin"], [])).not.toThrow();
   });
 });
 
@@ -358,6 +447,79 @@ describe("resolveCtaAndUrls", () => {
   it("falls back to the build label when the effective type is build, else the primary label", () => {
     const result = resolveCtaAndUrls({ ...cta, primaryType: "remix", labels: { ...cta.labels, build: "Custom build label", primary: "Fallback primary label" } }, "inventory-tracker");
     expect(result.ctaLabel).toBe("Custom build label");
+  });
+});
+
+describe("buildSocialStrategy", () => {
+  function buildAppCta(overrides: Partial<ReturnType<typeof resolveCtaAndUrls>["cta"]> = {}) {
+    return { primaryType: "build" as const, demoUrl: null, remixUrl: null, buildUrl: HOMEPAGE_DASHBOARD_URL, labels: { viewDemo: null, remix: null, build: "Build it", copyPrompt: null }, utmContent: "inventory-tracker", ...overrides };
+  }
+
+  function baseParams(overrides: Partial<Parameters<typeof buildSocialStrategy>[0]> = {}) {
+    const context = buildAssetGenerationContext({
+      run: fixtureTopicScoringRun(),
+      topic: resolveSelectedTopic(fixtureTopicScoringRun(), "topic_abc").topic,
+      scoredTopic: resolveSelectedTopic(fixtureTopicScoringRun(), "topic_abc").scoredTopic,
+      language: "en",
+      requestedSocialChannels: ["linkedin"],
+      existingAppCatalog: [],
+    });
+    return {
+      analysis: fixtureAnalysis({ socialFeaturedExistingAppSlugs: ["orderly", "bookly"] }),
+      context,
+      finalSlug: "inventory-tracker",
+      campaignId: CAMPAIGN.id,
+      destinationUrl: null,
+      cta: buildAppCta(),
+      ...overrides,
+    };
+  }
+
+  it("always includes the new app's own final slug alongside the model-chosen existing apps, deduped", () => {
+    const strategy = buildSocialStrategy(baseParams());
+    expect(strategy.featuredAppSlugs).toEqual(["inventory-tracker", "orderly", "bookly"]);
+  });
+
+  it("dedupes if the model happens to reference the new app's slug redundantly", () => {
+    const strategy = buildSocialStrategy(baseParams({ analysis: fixtureAnalysis({ socialFeaturedExistingAppSlugs: ["inventory-tracker", "orderly"] }) }));
+    expect(strategy.featuredAppSlugs).toEqual(["inventory-tracker", "orderly"]);
+  });
+
+  it("sets scope to 'collection' and preserves campaign identity from context", () => {
+    const strategy = buildSocialStrategy(baseParams());
+    expect(strategy.scope).toBe("collection");
+    expect(strategy.campaignId).toBe(CAMPAIGN.id);
+    expect(strategy.campaignName).toBe(CAMPAIGN.name);
+  });
+
+  it("utmContent differs from the app's own final slug", () => {
+    const strategy = buildSocialStrategy(baseParams());
+    expect(strategy.utmContent).not.toBe("inventory-tracker");
+    expect(strategy.utmContent).toContain(CAMPAIGN.id);
+  });
+
+  it("passes a real destinationUrl through unchanged", () => {
+    const strategy = buildSocialStrategy(baseParams({ destinationUrl: "https://whacka-growth-site.vercel.app" }));
+    expect(strategy.destinationUrl).toBe("https://whacka-growth-site.vercel.app");
+  });
+
+  it("passes a null destinationUrl through as null (never fabricates one)", () => {
+    const strategy = buildSocialStrategy(baseParams({ destinationUrl: null }));
+    expect(strategy.destinationUrl).toBeNull();
+  });
+
+  it("throws if destinationUrl would collide with the Whacka dashboard URL", () => {
+    expect(() => buildSocialStrategy(baseParams({ destinationUrl: HOMEPAGE_DASHBOARD_URL }))).toThrow(AssetGenerationValidationError);
+  });
+
+  it("throws if destinationUrl would collide with the app's own buildUrl", () => {
+    const cta = buildAppCta({ buildUrl: "https://example.com/app-specific-build" });
+    expect(() => buildSocialStrategy(baseParams({ destinationUrl: "https://example.com/app-specific-build", cta }))).toThrow(AssetGenerationValidationError);
+  });
+
+  it("throws if destinationUrl would collide with the app's own demoUrl or remixUrl", () => {
+    const cta = buildAppCta({ demoUrl: "https://example.com/demo" });
+    expect(() => buildSocialStrategy(baseParams({ destinationUrl: "https://example.com/demo", cta }))).toThrow(AssetGenerationValidationError);
   });
 });
 
@@ -708,6 +870,124 @@ describe("assembleAssetBundle", () => {
     expect(bundle.seo.metaDescription).toBe(longMeta);
   });
 
+  it("omits social.strategy entirely when there are zero social posts", () => {
+    const context = buildContext();
+    const bundle = assembleAssetBundle({
+      analysis: fixtureAnalysis({ socialPosts: [], socialFeaturedExistingAppSlugs: [] }),
+      context,
+      finalSlug: "inventory-tracker",
+      slugConflicted: false,
+      slugOriginalSuggestion: "inventory-tracker",
+      campaignId: CAMPAIGN.id,
+      generatedAt: "2026-07-16T00:00:00.000Z",
+      promptVersion: "1.0.0",
+      provenance,
+      allowUnapprovedTopicUsed: false,
+      allowHoldTopicUsed: false,
+    });
+    expect(bundle.social.strategy).toBeUndefined();
+  });
+
+  it("includes a deterministic social.strategy when at least one social post exists", () => {
+    const context = buildContext();
+    const analysis = fixtureAnalysis({
+      socialPosts: [{ channel: "linkedin", variant: "toolkit", copy: "This toolkit includes several small-business ideas." }],
+      socialFeaturedExistingAppSlugs: ["orderly", "bookly"],
+    });
+    const bundle = assembleAssetBundle({
+      analysis,
+      context,
+      finalSlug: "inventory-tracker",
+      slugConflicted: false,
+      slugOriginalSuggestion: "inventory-tracker",
+      campaignId: CAMPAIGN.id,
+      generatedAt: "2026-07-16T00:00:00.000Z",
+      promptVersion: "1.0.0",
+      provenance,
+      allowUnapprovedTopicUsed: false,
+      allowHoldTopicUsed: false,
+      collectionDestinationUrl: "https://whacka-growth-site.vercel.app",
+    });
+    expect(bundle.social.strategy).toEqual({
+      scope: "collection",
+      campaignId: CAMPAIGN.id,
+      campaignName: CAMPAIGN.name,
+      featuredAppSlugs: ["inventory-tracker", "orderly", "bookly"],
+      destinationUrl: "https://whacka-growth-site.vercel.app",
+      utmContent: expect.stringContaining(CAMPAIGN.id),
+    });
+  });
+
+  it("adds the not-configured warning and keeps destinationUrl null when no collection URL is supplied", () => {
+    const context = buildContext();
+    const analysis = fixtureAnalysis({
+      socialPosts: [{ channel: "linkedin", variant: "toolkit", copy: "This toolkit includes several small-business ideas." }],
+      socialFeaturedExistingAppSlugs: ["orderly", "bookly"],
+    });
+    const bundle = assembleAssetBundle({
+      analysis,
+      context,
+      finalSlug: "inventory-tracker",
+      slugConflicted: false,
+      slugOriginalSuggestion: "inventory-tracker",
+      campaignId: CAMPAIGN.id,
+      generatedAt: "2026-07-16T00:00:00.000Z",
+      promptVersion: "1.0.0",
+      provenance,
+      allowUnapprovedTopicUsed: false,
+      allowHoldTopicUsed: false,
+      collectionDestinationUrl: null,
+    });
+    expect(bundle.social.strategy?.destinationUrl).toBeNull();
+    expect(bundle.validation.warnings.some((w) => w.includes("No public collection landing page URL is configured"))).toBe(true);
+  });
+
+  it("does not add the not-configured warning when a real collection URL is supplied", () => {
+    const context = buildContext();
+    const analysis = fixtureAnalysis({
+      socialPosts: [{ channel: "linkedin", variant: "toolkit", copy: "This toolkit includes several small-business ideas." }],
+      socialFeaturedExistingAppSlugs: ["orderly", "bookly"],
+    });
+    const bundle = assembleAssetBundle({
+      analysis,
+      context,
+      finalSlug: "inventory-tracker",
+      slugConflicted: false,
+      slugOriginalSuggestion: "inventory-tracker",
+      campaignId: CAMPAIGN.id,
+      generatedAt: "2026-07-16T00:00:00.000Z",
+      promptVersion: "1.0.0",
+      provenance,
+      allowUnapprovedTopicUsed: false,
+      allowHoldTopicUsed: false,
+      collectionDestinationUrl: "https://whacka-growth-site.vercel.app",
+    });
+    expect(bundle.validation.warnings.some((w) => w.includes("No public collection landing page URL is configured"))).toBe(false);
+  });
+
+  it("rejects (via validateAssetBundle) an empty campaignId — campaign identity can never be missing", () => {
+    const context = buildContext();
+    const analysis = fixtureAnalysis({
+      socialPosts: [{ channel: "linkedin", variant: "toolkit", copy: "This toolkit includes several small-business ideas." }],
+      socialFeaturedExistingAppSlugs: ["orderly", "bookly"],
+    });
+    expect(() =>
+      assembleAssetBundle({
+        analysis,
+        context,
+        finalSlug: "inventory-tracker",
+        slugConflicted: false,
+        slugOriginalSuggestion: "inventory-tracker",
+        campaignId: "",
+        generatedAt: "2026-07-16T00:00:00.000Z",
+        promptVersion: "1.0.0",
+        provenance,
+        allowUnapprovedTopicUsed: false,
+        allowHoldTopicUsed: false,
+      })
+    ).toThrow();
+  });
+
   it("does not mutate the input analysis or context", () => {
     const context = buildContext();
     const analysis = fixtureAnalysis();
@@ -858,5 +1138,46 @@ describe("runAssetGenerationAgent — end to end", () => {
     expect(JSON.stringify(run.scoredTopics)).toBe(before);
     expect(result.selectedScoredTopic.recommendation).toBe("hold");
     expect(result.selectedScoredTopic.blockers).toEqual(["insufficient_evidence: not enough signal"]);
+  });
+
+  it("threads collectionDestinationUrl through into social.strategy.destinationUrl", async () => {
+    const run = fixtureTopicScoringRun();
+    const analysis = fixtureAnalysis({
+      socialPosts: [{ channel: "linkedin", variant: "toolkit", copy: "This toolkit includes a few small-business ideas worth exploring." }],
+      socialFeaturedExistingAppSlugs: ["orderly", "bookly"],
+    });
+    const result = await runAssetGenerationAgent({
+      ...baseParams,
+      run,
+      requestedSocialChannels: ["linkedin"],
+      provider: new FakeProvider(analysis),
+      collectionDestinationUrl: "https://example.com/collection",
+    });
+    expect(result.assetBundle.social.strategy?.destinationUrl).toBe("https://example.com/collection");
+    expect(result.assetBundle.social.strategy?.scope).toBe("collection");
+    expect(result.assetBundle.social.strategy?.featuredAppSlugs).toContain("orderly");
+    expect(result.assetBundle.social.strategy?.featuredAppSlugs).toContain("bookly");
+  });
+
+  it("keeps app-level content (problem, solution, appPrompt, SEO, CTA) entirely app-specific regardless of the new collection-level social scope", async () => {
+    const run = fixtureTopicScoringRun();
+    const analysis = fixtureAnalysis({
+      socialPosts: [{ channel: "linkedin", variant: "toolkit", copy: "This toolkit includes a few small-business ideas worth exploring." }],
+      socialFeaturedExistingAppSlugs: ["orderly", "bookly"],
+    });
+    const result = await runAssetGenerationAgent({
+      ...baseParams,
+      run,
+      requestedSocialChannels: ["linkedin"],
+      provider: new FakeProvider(analysis),
+      collectionDestinationUrl: "https://example.com/collection",
+    });
+    expect(result.assetBundle.app.problem).toBe(analysis.appConcept.problem);
+    expect(result.assetBundle.app.solution).toBe(analysis.appConcept.solution);
+    expect(result.assetBundle.app.appPrompt).toBe(analysis.appConcept.appPrompt);
+    expect(result.assetBundle.seo.title).toBe(analysis.seo.title);
+    expect(result.assetBundle.seo.metaDescription).toBe(analysis.seo.metaDescription);
+    expect(result.assetBundle.app.faq).toEqual(analysis.seo.faq);
+    expect(result.assetBundle.cta.primaryType).toBe(analysis.cta.primaryType);
   });
 });

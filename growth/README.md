@@ -1350,7 +1350,87 @@ No social channels are requested by default — `social.posts` is `[]`.
 passes through an explicit allow-list; the model may only produce posts
 for those exact channels, and any post for an unrequested channel is
 rejected outright (not silently dropped). Social copy never implies the
-post was actually published anywhere.
+post was actually published anywhere. There is no automatic posting or
+scheduling anywhere in this pipeline — `growth:generate-assets` only ever
+writes local JSON/Markdown files.
+
+### Social content is collection-level, not one isolated app
+
+App-page assets (`app.*`, SEO, FAQ, the app-page CTA) are generated **per
+topic/app**, exactly as before, and remain entirely about the selected
+app. Social assets (when any `--social-channels` are requested) are
+generated **for the whole collection/campaign** instead — a mentor
+decision: promoting one isolated mini-app on social media isn't
+meaningful. The selected app is used as one example, or as a fresh content
+angle, never as the sole subject of a post.
+
+`AssetBundle.social.strategy` (present only when `social.posts` is
+non-empty; omitted for a zero-channel run, and omitted on files written
+before this field existed — old files remain readable) records this
+explicitly:
+
+```ts
+social.strategy: {
+  scope: "collection";
+  campaignId: string;
+  campaignName: string;
+  featuredAppSlugs: string[]; // the new app's own final slug + existing catalog apps
+  destinationUrl: string | null;
+  utmContent: string; // collection-level, always distinct from the app's own slug
+}
+```
+
+Content angles the model is asked to use: a shared operational problem
+("several small businesses juggle X"), a toolkit/list of lightweight
+mini-app ideas, a scenario spanning several everyday tasks, or educational
+examples — never a standalone product launch. `featuredAppSlugs` always
+includes the new app's own slug plus, when the existing-app catalog
+(`src/data/apps.ts`, the same 5 real apps used everywhere else in this
+pipeline — never duplicated) has two or more entries and any channel was
+requested, at least two of them. Existing catalog apps are already live at
+`/apps/{slug}`; the new concept is only a draft — copy must not conflate
+the two.
+
+Banned in social copy (validated deterministically, not just by prompt —
+see "Deterministic validation" below): standalone-launch patterns
+("Introducing `<AppName>`", "Launching `<AppName>`", "Try our new
+`<AppName>` app", "`<AppName>` is the solution", "Build this one app
+now"), and the overclaim phrases "proven demand", "validated
+opportunity", "confirmed user need", "market-leading", "top-performing
+product".
+
+**CTA and destination:** social CTA targets the collection landing page —
+never the selected app's own build/demo/remix URL, and never the Whacka
+dashboard. This reuses the site's existing `PUBLIC_SITE_URL` (already
+used by `astro.config.mjs`/sitemap/canonical links — see .env.example) as
+the collection landing page URL, since this single-campaign site's
+homepage already lists the full app catalog. When `PUBLIC_SITE_URL` isn't
+configured, `destinationUrl` stays `null` — never fabricated — and a
+clear warning is recorded in `validation.warnings`. Generated social copy
+may still contain a textual call to action ("Explore the Small Business
+Mini App Toolkit"), but must never claim a working link exists when
+`destinationUrl` is null.
+
+**Deterministic validation** (`growth/agents/asset-generation-agent.ts`)
+rejects the model's response — a clear regeneration failure, never a
+silent rewrite — when: a social post uses standalone-launch or overclaim
+language; a featured slug isn't in the selected app or the existing
+catalog; fewer than `min(2, catalog size)` existing apps are featured
+while a channel was requested; or (defensively, should never actually
+happen) the computed `destinationUrl` would collide with the Whacka
+dashboard or the app's own CTA URLs.
+
+**CMS Writer never sees this.** `AssetBundle.social` (posts or strategy)
+has no corresponding field in the Sanity `appTool` payload schema — the
+CMS Writer mapping (`growth/contracts/cms-write-request.ts`) only ever
+reads `app.*`/`seo.*`/`cta.*`, so collection-level social metadata is
+structurally impossible to leak into a Sanity draft.
+
+Future collections (e.g. an "Education" campaign) can reuse this exact
+architecture unchanged — `campaignId`/`campaignName` already come from
+the run's own `campaign` object, never hardcoded, so a new campaign only
+needs its own Topic Scoring run and, optionally, its own collection
+landing page. That future collection is not implemented here.
 
 ### AssetBundle compatibility and SEO persistence
 
@@ -1434,6 +1514,10 @@ page** — `compatibility.cmsWritePerformed` and `.siteModified` are always
 | `Selected topic's recommendation is "hold". Pass --allow-hold-topic ...` | Dry-run/Mock mode with a `hold` topic and no override. |
 | `Selected topic's recommendation is "hold". Live Anthropic generation for a 'hold' topic is not supported in v1 ...` | Live Anthropic mode with a `hold` topic — never overridable. |
 | `Model generated a social post for channel "...", which was not requested.` | The model produced a post outside the explicit `--social-channels` allow-list — rejected, not patched. |
+| `Social post for channel "..." uses standalone-app-launch language ...` | Social copy read like a single-app product launch ("Introducing `<App>`", etc.) — rejected, regenerate. |
+| `Social post for channel "..." makes an unsupported claim ...` | Social copy claimed proven/validated demand or similar — rejected, regenerate. |
+| `Model's socialFeaturedExistingAppSlugs references "...", which is not in the supplied existing-app catalog.` | The model invented or misspelled an existing-app slug. |
+| `Social content must feature at least N existing app(s) ...` | The selected app would have been the sole featured subject even though other collection apps are available. |
 | `Could not resolve a valid slug from the suggested name "..."` | The provider's slug suggestion normalized to an empty string. |
 | `Model response did not match the required schema: ...` | Zod validation failed (bad enum, empty required field, unknown key, invented URL/ID/status field, etc.). |
 

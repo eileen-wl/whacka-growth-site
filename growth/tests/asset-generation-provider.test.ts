@@ -39,6 +39,7 @@ function validAnalysis(): AssetGenerationAnalysis {
     seo: { title: "Test App", metaDescription: "A meta description.", primaryKeyword: "test app", secondaryKeywords: [], faq: [] },
     cta: { primaryType: "build", labels: { primary: "Build with Whacka", viewDemo: null, remix: null, build: "Build with Whacka", copyPrompt: null }, rationale: "Build is the safest CTA." },
     socialPosts: [],
+    socialFeaturedExistingAppSlugs: [],
     generationNotes: { topicAlignment: "Aligned.", differentiationFromExistingApps: "Distinct.", assumptions: [], limitations: [], requiresHumanReview: true },
   };
 }

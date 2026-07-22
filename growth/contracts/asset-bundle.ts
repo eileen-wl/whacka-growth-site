@@ -4,6 +4,7 @@ import type { ScoredTopic } from "./scored-topic";
 import {
   assertSupportedMajorVersion,
   campaignIdSchema,
+  campaignNameSchema,
   isoTimestampSchema,
   provenanceSchema,
   refIdArraySchema,
@@ -134,8 +135,41 @@ export const assetSocialPostSchema = z.strictObject({
   text: z.string().min(1).max(2000),
 });
 
+/**
+ * Social content is deliberately scoped to the whole collection/campaign,
+ * never to the one newly generated app in isolation — a mentor decision:
+ * promoting a single isolated mini-app on social media isn't meaningful.
+ * `scope` is currently always the literal `"collection"` (the only scope
+ * this version supports); `featuredAppSlugs` always includes the newly
+ * generated app's own final slug plus, when the existing-app catalog has
+ * enough entries, at least two existing apps — so the new app is never
+ * presented as the sole subject. Entirely deterministic, like `AssetCta`'s
+ * URLs: never trusted from the model. `destinationUrl` is the public
+ * collection/homepage URL (see `PUBLIC_SITE_URL` in .env.example) — `null`,
+ * never fabricated, when that isn't configured.
+ */
+export const assetSocialStrategySchema = z.strictObject({
+  scope: z.literal("collection"),
+  campaignId: campaignIdSchema,
+  campaignName: campaignNameSchema,
+  featuredAppSlugs: z.array(kebabSlugSchema).min(1).max(20),
+  destinationUrl: z.union([z.url(), z.null()]),
+  utmContent: z.string().min(1).max(160),
+});
+
+export type AssetSocialStrategy = z.infer<typeof assetSocialStrategySchema>;
+
+/**
+ * `strategy` is optional so an `AssetBundle` written before this field
+ * existed remains structurally valid and readable — see
+ * growth/contracts/README.md's additive-optional-field versioning rule.
+ * Every new bundle with at least one social post always sets it explicitly;
+ * a bundle with zero social posts (no channels requested) omits it, since
+ * there is no social content for a strategy to describe.
+ */
 export const assetSocialSchema = z.strictObject({
   posts: z.array(assetSocialPostSchema).max(50),
+  strategy: assetSocialStrategySchema.optional(),
 });
 
 export type AssetSocial = z.infer<typeof assetSocialSchema>;
