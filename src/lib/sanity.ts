@@ -10,6 +10,7 @@
 import "dotenv/config";
 import { createClient } from "@sanity/client";
 import { apps as fallbackApps } from "../data/apps";
+import { applyImageFallbacks } from "./images";
 import {
   APP_TOOLS_QUERY,
   buildClientConfig,
@@ -70,7 +71,7 @@ if (SANITY_PREVIEW_MODE) {
 
 let cachedApps: Promise<AppToolData[]> | null = null;
 
-async function fetchApps(): Promise<AppToolData[]> {
+async function resolveRawAppList(): Promise<AppToolData[]> {
   if (!client) {
     return fallbackApps;
   }
@@ -91,6 +92,16 @@ async function fetchApps(): Promise<AppToolData[]> {
     console.warn("[sanity] Could not fetch app data, falling back to src/data/apps.ts:", err);
     return fallbackApps;
   }
+}
+
+/**
+ * Resolves every app's `image`/`screenshot.image` to a path guaranteed to
+ * exist under `public/` (see src/lib/images.ts) — applied once here so no
+ * component needs its own existence check, and so a generated draft whose
+ * cover image was never illustrated never causes a missing-file request.
+ */
+async function fetchApps(): Promise<AppToolData[]> {
+  return applyImageFallbacks(await resolveRawAppList());
 }
 
 /** All appTool records, fetched from Sanity when configured and falling back to the static data otherwise. Cached per build/request. */

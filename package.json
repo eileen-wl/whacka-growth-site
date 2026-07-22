@@ -22,6 +22,7 @@
     "growth:generate-assets": "tsx growth/scripts/generate-assets.ts",
     "growth:cms-write": "tsx growth/scripts/write-cms-draft.ts",
     "growth:check-sanity-preview": "tsx growth/scripts/check-sanity-preview.ts",
+    "growth:check-site-readiness": "tsx growth/scripts/check-growth-site-readiness.ts",
     "test": "vitest run"
   },
   "dependencies": {

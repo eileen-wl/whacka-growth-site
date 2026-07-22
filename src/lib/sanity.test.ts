@@ -223,6 +223,28 @@ describe("src/lib/sanity.ts — module wiring, env precedence, and end-to-end be
     expect(createClientMock).not.toHaveBeenCalled();
   });
 
+  it("preview mode: a draft's guessed cover image path (no real file) resolves to the shared fallback, never a 404-prone URL", async () => {
+    vi.stubEnv("PUBLIC_SANITY_PROJECT_ID", "test_project");
+    vi.stubEnv("PUBLIC_SANITY_DATASET", "production");
+    vi.stubEnv("SANITY_PREVIEW_DRAFTS", "true");
+    vi.stubEnv("SANITY_API_TOKEN", "sk-test-token");
+    fetchMock.mockResolvedValue([fullDoc({ _id: "drafts.appTool-slotsmith", image: "/images/slotsmith/cover.svg" })]);
+
+    const mod = await import("./sanity");
+    const app = await mod.getAppBySlug("slotsmith");
+    expect(app?.image).toBe("/images/_fallback/cover.svg");
+  });
+
+  it("normal mode: an app with a real, existing cover image keeps that exact path", async () => {
+    vi.stubEnv("PUBLIC_SANITY_PROJECT_ID", "test_project");
+    vi.stubEnv("PUBLIC_SANITY_DATASET", "production");
+    fetchMock.mockResolvedValue([fullDoc({ _id: "appTool-orderly", slug: "orderly", name: "Orderly", image: "/images/orderly/cover.svg" })]);
+
+    const mod = await import("./sanity");
+    const app = await mod.getAppBySlug("orderly");
+    expect(app?.image).toBe("/images/orderly/cover.svg");
+  });
+
   it("preview mode never logs the token — console.log output is inspectable and token-free", async () => {
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
     vi.stubEnv("PUBLIC_SANITY_PROJECT_ID", "test_project");

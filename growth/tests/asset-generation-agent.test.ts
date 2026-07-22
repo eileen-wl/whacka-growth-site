@@ -17,6 +17,7 @@ import {
   validateAssetGenerationAnalysis,
 } from "../agents/asset-generation-agent";
 import { HOMEPAGE_DASHBOARD_URL } from "../../src/lib/utm";
+import { FALLBACK_COVER_IMAGE } from "../../src/lib/images";
 import type { AssetGenerationProvider } from "../llm/asset-generation-provider";
 import type { AssetGenerationAnalysis, AssetGenerationExistingAppCatalogEntry } from "../types/asset-generation";
 import type { ScoringDimensionKey } from "../types/topic-scoring";
@@ -636,6 +637,25 @@ describe("assembleAssetBundle", () => {
     expect(bundle.topicId).toBe("topic_abc");
     expect(bundle.scoredTopicId).toBe("scoredtopic_abc");
     expect(bundle.app.status).toBe("draft");
+  });
+
+  it("app.image is the shared fallback path, never a guessed non-existent per-slug path (no cover illustration is generated here)", () => {
+    const context = buildContext();
+    const bundle = assembleAssetBundle({
+      analysis: fixtureAnalysis(),
+      context,
+      finalSlug: "inventory-tracker",
+      slugConflicted: false,
+      slugOriginalSuggestion: "inventory-tracker",
+      campaignId: CAMPAIGN.id,
+      generatedAt: "2026-07-16T00:00:00.000Z",
+      promptVersion: "1.0.0",
+      provenance,
+      allowUnapprovedTopicUsed: false,
+      allowHoldTopicUsed: false,
+    });
+    expect(bundle.app.image).toBe(FALLBACK_COVER_IMAGE);
+    expect(bundle.app.image).not.toContain("inventory-tracker");
   });
 
   it("does not include the obsolete SEO persistence warning", () => {

@@ -1960,3 +1960,209 @@ for preview mode, and none should be added.
 | `growth:check-sanity-preview requires exactly one of --preview or --published.` | Neither or both flags were passed to the diagnostic CLI. |
 | `PUBLIC_SANITY_PROJECT_ID and PUBLIC_SANITY_DATASET must both be set in .env to run this check.` | The diagnostic CLI needs both, in either mode (unlike the token, which `--published` never needs). |
 
+**Integration-test drafts (e.g. `drafts.appTool-slotsmith`) must never be
+published.** They exist only to prove the preview pipeline itself works
+end-to-end — see "Integration-test mode" under CMS Writer above. Publishing
+one in Sanity Studio would put unreviewed, non-business-approved content in
+front of real site visitors the moment Vercel next rebuilds.
+
+### Generated-app cover image fallback
+
+`growth/agents/asset-generation-agent.ts` never generates a bespoke cover
+illustration for a new app — no step in the fixed Growth Loop does. Earlier,
+`assembleAssetBundle` wrote a guessed `/images/{slug}/cover.svg` path into
+`AssetBundle.app.image` (and CMS Writer copied it verbatim into the Sanity
+`appTool.image` field) even though that file was never created — which is
+exactly why `drafts.appTool-slotsmith`'s local preview page requested
+`/images/slotsmith/cover.svg` and got a real browser 404.
+
+The fix has two parts:
+
+1. **At generation time** (`growth/agents/asset-generation-agent.ts`):
+   `app.image` is now set to the shared fallback path
+   (`FALLBACK_COVER_IMAGE` from `src/lib/images.ts`,
+   `/images/_fallback/cover.svg`) instead of a guessed, unverified
+   per-slug path. That file is committed to the repo, so any future
+   generated app's stored `image` value is guaranteed to resolve. No
+   schema or contract change was needed — `AssetApp.image` /
+   `AppToolPayload.image` were already plain, non-empty strings; this
+   only changes what value gets written into them.
+2. **At render time** (`src/lib/images.ts`, wired into `src/lib/sanity.ts`'s
+   `fetchApps()`): every app's `image` and every `screenshots[].image` is
+   resolved through `resolveImageSrc()`, which checks the real filesystem
+   (`existsSync` against `public/`) and only ever returns either the
+   original path (a real file backs it) or `FALLBACK_COVER_IMAGE`. This is
+   the safety net for documents this fix can't rewrite — like the existing
+   `drafts.appTool-slotsmith` draft, whose stored `image` still says
+   `/images/slotsmith/cover.svg` — and for any hand-edited or older Sanity
+   document. It never treats slug-based image existence as guaranteed and
+   never hard-codes "slotsmith" (or any slug) anywhere in the resolver.
+
+Because this happens once, centrally, in the data layer, `AppCard.astro`
+and `AppDetail.astro` needed **no changes at all** — they still just render
+`app.image`/`shot.image` directly, and it is always already a real path by
+the time they see it. The five hand-authored apps (real files under
+`public/images/{slug}/`) are completely unaffected — `resolveImageSrc`
+finds their real file and returns the path unchanged. A remote
+`http(s)://` image URL (not used by any current app, but supported by the
+type) is passed through unchecked rather than treated as missing — this
+project doesn't own that file to verify or fabricate it.
+
+`resolveImageSrc`/`applyImageFallbacks` never require a generated image to
+exist before a draft page can render, never fabricate or download an
+external image, and never add integration-test-specific copy to the
+fallback — it's one neutral "Preview coming soon" placeholder
+(`public/images/_fallback/cover.svg`) shared by any app in this state.
+
+### Deployment readiness
+
+**Confirmed from this repository:**
+
+- Git remote: `https://github.com/eileen-wl/whacka-growth-site.git`; local
+  `main` tracks `origin/main` (`.git/config`).
+- Build command: `npm run build` → `astro build` (`package.json`) — a
+  standard Astro static build with no custom `vercel-build` script.
+- No `vercel.json` in the repo — build/output settings, if customized at
+  all, live only in the Vercel project's own dashboard, not in this repo.
+- No `.vercel/` directory checked in, no `.github/workflows/` — there is no
+  CI/CD pipeline definition of any kind inside this repository.
+- No deploy hook URL, webhook config, or Sanity webhook definition exists
+  anywhere in the repository, `.env.example`, or this README before this
+  section — a Sanity → Vercel rebuild connection, if it exists, is
+  configured entirely outside the repo (Sanity's manage UI + Vercel's
+  dashboard).
+- `PUBLIC_SITE_URL=https://whacka-growth-site.vercel.app` in `.env.example`
+  matches the GitHub repo name, consistent with (but not proof of) a
+  same-named Vercel project.
+- The Astro site defaults to the `"published"` perspective and
+  `useCdn: true` unless `SANITY_PREVIEW_DRAFTS=true` is explicitly set —
+  see "Why a shell-set `SANITY_PREVIEW_DRAFTS=true` didn't work" above.
+  Nothing in this repo sets it anywhere other than as a local, temporary
+  shell variable.
+- Sanity Studio's own config (`studio/sanity.config.ts`,
+  `studio/sanity.cli.ts`) reads `SANITY_STUDIO_PROJECT_ID`/
+  `SANITY_STUDIO_DATASET` (a separate env namespace from the Astro site's
+  `PUBLIC_SANITY_*`), defaulting dataset to `"production"`. It has no
+  webhook/hook configuration of its own.
+
+**Still requires manual verification in the Vercel dashboard** (Vercel
+Project Settings):
+
+- Whether `eileen-wl/whacka-growth-site` is actually connected as this
+  project's Git repository at all.
+- Whether pushes to `main` are configured as the Production deployment
+  trigger (Settings → Git → Production Branch).
+- Whether a Deploy Hook exists for Sanity to call (Settings → Git → Deploy
+  Hooks) — none is referenced anywhere in this repo.
+- The actual `PUBLIC_SANITY_DATASET` / `PUBLIC_SANITY_PROJECT_ID` values
+  set for the Production environment (Settings → Environment Variables) —
+  this repo's `.env`/`.env.example` only prove what a local dev build
+  reads, not what Vercel Production reads.
+- **That `SANITY_PREVIEW_DRAFTS` is *not* set in the Production environment
+  variables** — if it were ever set to `true` there, production would
+  serve `drafts.appTool-slotsmith` (or any other draft) to real visitors.
+  This repo's code defaults it to `false`/unset, but only the Vercel
+  dashboard can confirm nothing overrides that in Production.
+- Whether the Production domain actually matches `PUBLIC_SITE_URL`
+  (Settings → Domains) — mismatches would produce wrong canonical URLs,
+  sitemap entries, and social `destinationUrl` values.
+
+**Still requires manual verification in the Sanity dashboard**
+(manage.sanity.io):
+
+- Whether an outbound webhook exists on the `production` dataset that
+  calls a Vercel Deploy Hook on publish (Sanity does not rebuild a
+  statically-built Astro site on its own — a webhook is the only mechanism
+  that could make "Sanity publish → Vercel rebuild" happen automatically).
+- If one exists, whether it filters to the `appTool` document type (or
+  fires on every dataset write) and whether it fires on publish only or
+  also on draft mutation.
+
+### Safe deployment verification plan (documented, not executed in this task)
+
+Goal: prove `Sanity publish → Vercel rebuild → updated public page` works,
+without publishing `drafts.appTool-slotsmith` (not business-approved) and
+without this task triggering Vercel or mutating Sanity itself.
+
+**A. Sanity webhook test delivery / Vercel Deploy Hook — preferred, if the
+above UI checks confirm both exist.** Sanity's manage UI has a "Test"
+action on a configured webhook that sends a synthetic sample payload to its
+target URL — this validates the Sanity → Vercel handoff without any real
+content mutation. This is the safest option because it tests exactly the
+automation path in question and touches no content at all. Only usable
+once a webhook and Deploy Hook actually exist (currently unconfirmed — see
+above).
+
+**B. A harmless, reverted edit to a non-visible field on an already
+published, real app — only if A isn't practical.** The Sanity `appTool`
+schema's `notes` field ("Internal Notes... not shown on the site" per
+`studio/schemaTypes/appTool.ts`) is confirmed, by inspection, to be read
+into `AppToolData.notes` (`src/lib/sanity-shared.ts`) but never referenced
+by `AppCard.astro`, `AppDetail.astro`, `index.astro`, or `[slug].astro` —
+so editing then reverting it on one existing published app (e.g. Orderly)
+would exercise a real publish → rebuild cycle without changing any rendered
+public content. This is still a real Sanity mutation and a real Vercel
+trigger — it requires its own explicit, separate human approval before
+anyone runs it; it is not authorized by this task.
+
+**C. A separate staging dataset + protected Vercel Preview environment —
+fallback if A and B are both impractical.** Heavier to set up (a second
+Sanity dataset, a second set of Vercel environment variables scoped to
+Preview deployments) but fully isolates verification from the real
+`production` dataset and the real Production deployment. Worth it only if
+neither A nor B is workable.
+
+**Do not use `drafts.appTool-slotsmith` for this test under any option** —
+it is not business-approved for publication regardless of which
+verification path is chosen.
+
+None of A/B/C were implemented or executed as part of this task.
+
+### Growth Site Engine readiness check CLI
+
+```bash
+npm run growth:check-site-readiness
+```
+
+Read-only: inspects local repository configuration only (env vars via the
+same `src/lib/sanity-shared.ts` logic the site itself uses, the real
+filesystem for `public/images/_fallback/cover.svg` and `vercel.json`).
+Makes no network request to Sanity, Vercel, or anywhere else — it cannot
+and does not check account-side settings; see "Deployment readiness"
+above for what still needs manual verification. Prints only sanitized
+booleans/enums, never a token or deploy-hook URL:
+
+```
+[check-site-readiness] Public site URL configured: true
+[check-site-readiness] Sanity project configured: true
+[check-site-readiness] Sanity dataset configured: true
+[check-site-readiness] Production perspective: published
+[check-site-readiness] Preview mode disabled by default: true
+[check-site-readiness] Fallback cover image exists: true
+[check-site-readiness] vercel.json present in repo: false
+[check-site-readiness] Deployment automation status: requires_ui_verification
+[check-site-readiness] Vercel/Sanity account-side settings (...) cannot be inspected from this repository — verify them in the Vercel and Sanity dashboards. See "Deployment readiness" in growth/README.md.
+[check-site-readiness] Read-only — no content was created, modified, published, or deployed.
+```
+
+`deploymentAutomationStatus` is `"confirmed"` only when a `vercel.json`
+exists in the repo (the one deployment-automation fact a checkout can
+prove on its own) — `"requires_ui_verification"` does **not** mean
+deployment automation is broken or missing, only that this script cannot
+prove it either way from a git checkout.
+
+### Exact next manual steps after this task
+
+1. In the Vercel dashboard, confirm the repo-connection, production-branch,
+   and Production environment variable items listed under "Deployment
+   readiness" above.
+2. In the Sanity manage UI, confirm whether a publish webhook + Vercel
+   Deploy Hook already exist; if not, decide (separately from this task)
+   whether to configure one.
+3. Once both are confirmed, run **Option A** above (webhook test delivery)
+   to verify the pipeline without publishing any content.
+4. Only after the pipeline is verified — and only with explicit,
+   separate business approval — consider publishing a real (non-draft,
+   non-integration-test) app. `drafts.appTool-slotsmith` remains
+   engineering-only and must not be that app.
+
